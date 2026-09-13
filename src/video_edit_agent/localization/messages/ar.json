@@ -1,0 +1,15 @@
+{
+  "analyzing_video": "جاري تحليل الفيديو...",
+  "transcribed": "تم تفريغ الصوت.",
+  "detected_repetition": "تم اكتشاف أجزاء مكررة.",
+  "preparing_edl": "جاري إعداد خطة المونتاج...",
+  "generating_captions": "جاري إنشاء الكابشن...",
+  "generating_motion": "جاري إنشاء الـMotion Graphics...",
+  "running_qa": "جاري فحص النسخة النهائية...",
+  "render_success": "تم إنشاء الفيديو بنجاح.",
+  "no_api_keys": "لا توجد مفاتيح API متاحة، سيتم استخدام Local Whisper تلقائيًا.",
+  "offline_mode": "وضع عدم الاتصال مفعّل — لن يتم إجراء أي طلبات سحابية.",
+  "provider_fallback": "تعذر استخدام {provider}، جاري التبديل إلى {fallback}.",
+  "error_generic": "حدث خطأ: {message}",
+  "project_resumed": "تم استئناف المشروع من العمل السابق."
+}

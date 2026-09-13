@@ -1,0 +1,29 @@
+name: default
+language:
+  primary: ar
+  tone: simple
+colors:
+  primary: "#111111"
+  secondary: "#FFFFFF"
+  accent: "#FFCC00"
+fonts: []
+logo_rules: null
+captions:
+  preset: minimal
+  rtl: true
+  max_lines: 2
+  word_highlight: false
+  font: null
+  primary_color: null
+  highlight_color: null
+motion:
+  energy: medium
+  avoid: []
+  preferred_engine: null
+broll_aesthetic: null
+cta:
+  style: minimal
+  text_default: null
+safe_zones: {}
+preferred_aspect_ratio: "9:16"
+avoid: []

@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "video-edit-agent"
+version = "0.1.0"
+description = "Arabic-first, provider-agnostic AI video editing agent (CLI: videoedit)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "video-edit-agent contributors" }]
+keywords = ["video", "editing", "arabic", "ffmpeg", "ai", "captions"]
+
+dependencies = [
+  "pydantic>=2.5",
+  "pyyaml>=6.0",
+  "typer>=0.12",
+  "rich>=13.7",
+  "python-dotenv>=1.0",
+  "Pillow>=10.0",
+  "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+local = ["faster-whisper>=1.0", "arabic-reshaper>=3.0", "python-bidi>=0.4"]
+gemini = ["google-genai>=0.3"]
+elevenlabs = ["elevenlabs>=1.0"]
+motion = ["manim>=0.18"]
+subject = ["mediapipe>=0.10", "opencv-python-headless>=4.9"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.4", "mypy>=1.10"]
+all = [
+  "faster-whisper>=1.0", "arabic-reshaper>=3.0", "python-bidi>=0.4",
+  "google-genai>=0.3", "elevenlabs>=1.0", "manim>=0.18",
+  "mediapipe>=0.10", "opencv-python-headless>=4.9",
+]
+
+[project.scripts]
+videoedit = "video_edit_agent.cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/video_edit_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

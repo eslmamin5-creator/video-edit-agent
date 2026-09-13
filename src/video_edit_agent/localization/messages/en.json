@@ -1,0 +1,15 @@
+{
+  "analyzing_video": "Analyzing video...",
+  "transcribed": "Audio transcribed.",
+  "detected_repetition": "Repeated segments detected.",
+  "preparing_edl": "Preparing edit plan...",
+  "generating_captions": "Generating captions...",
+  "generating_motion": "Generating Motion Graphics...",
+  "running_qa": "Running final QA checks...",
+  "render_success": "Video rendered successfully.",
+  "no_api_keys": "No API keys available — Local Whisper will be used automatically.",
+  "offline_mode": "Offline mode is on — no cloud requests will be made.",
+  "provider_fallback": "Could not use {provider}, falling back to {fallback}.",
+  "error_generic": "Error: {message}",
+  "project_resumed": "Project resumed from previous work."
+}
