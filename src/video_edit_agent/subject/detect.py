@@ -26,7 +26,19 @@ class SubjectMaskResult:
 
 
 def is_available() -> bool:
-    return importlib_util.find_spec("mediapipe") is not None
+    """Checks not just that `mediapipe` is importable, but that the specific
+    legacy Solutions API this adapter needs is actually present. mediapipe
+    1.0+ removed `mediapipe.solutions` in favor of the new Tasks API, so a
+    bare import check alone would falsely report "available" and then crash
+    (spec V1.1 hardening: never let a capability check pass on import alone)."""
+    if importlib_util.find_spec("mediapipe") is None:
+        return False
+    try:
+        import mediapipe as mp  # type: ignore
+
+        return hasattr(mp, "solutions") and hasattr(mp.solutions, "selfie_segmentation")
+    except ImportError:
+        return False
 
 
 def _segmenter():
@@ -38,15 +50,22 @@ def _segmenter():
 def detect_mask(frame_rgb: np.ndarray) -> SubjectMaskResult:
     """Runs person segmentation on a single RGB frame (HxWx3 uint8) and
     returns a soft mask. Raises SubjectDetectionUnavailable if mediapipe
-    isn't installed."""
+    isn't installed, or if an installed version doesn't expose the expected
+    API (e.g. mediapipe 1.0+ dropped `mediapipe.solutions`)."""
     if not is_available():
         raise SubjectDetectionUnavailable(
-            "mediapipe is not installed (pip install video-edit-agent[all]). "
-            "Behind-subject compositing will fall back to a plain overlay."
+            "mediapipe is not installed, or the installed version doesn't provide the "
+            "legacy `mediapipe.solutions.selfie_segmentation` API this adapter needs "
+            "(mediapipe>=1.0 removed it in favor of the Tasks API; use mediapipe<1.0, "
+            "e.g. mediapipe==0.10.21). Behind-subject compositing will fall back to a "
+            "plain overlay."
         )
 
-    with _segmenter() as seg:
-        result = seg.process(frame_rgb)
-        mask = result.segmentation_mask.astype(np.float32)
-        confidence = float(mask.mean())
-        return SubjectMaskResult(mask=mask, confidence=confidence)
+    try:
+        with _segmenter() as seg:
+            result = seg.process(frame_rgb)
+            mask = result.segmentation_mask.astype(np.float32)
+            confidence = float(mask.mean())
+            return SubjectMaskResult(mask=mask, confidence=confidence)
+    except AttributeError as e:  # noqa: BLE001 - defensive: is_available() should prevent this
+        raise SubjectDetectionUnavailable(f"mediapipe API mismatch: {e}") from e

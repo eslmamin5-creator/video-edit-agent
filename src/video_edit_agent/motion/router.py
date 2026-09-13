@@ -72,7 +72,7 @@ def render_motion(
     """Try each engine in priority order; return a MotionPlanItem recording
     which engine actually produced output (or the last error if the `simple`
     engine itself somehow failed, which should not normally happen)."""
-    last_error: str | None = None
+    fallback_log: list[str] = []
 
     for engine in _engine_priority(spec, brand):
         try:
@@ -87,9 +87,14 @@ def render_motion(
                 out_path = output_dir / f"{slot_id}_simple.png"
                 result = simple_engine.render_animation(spec, out_path)
 
-            return MotionPlanItem(spec=spec, engine_used=engine, output_path=str(result))
+            return MotionPlanItem(
+                spec=spec, engine_used=engine, output_path=str(result), fallback_log=fallback_log
+            )
         except Exception as exc:  # noqa: BLE001 - fall back to the next engine
-            last_error = f"{engine.value}: {exc}"
+            fallback_log.append(f"{engine.value}: {exc}")
             continue
 
-    return MotionPlanItem(spec=spec, engine_used=None, output_path=None, error=last_error)
+    return MotionPlanItem(
+        spec=spec, engine_used=None, output_path=None, error=fallback_log[-1] if fallback_log else None,
+        fallback_log=fallback_log,
+    )

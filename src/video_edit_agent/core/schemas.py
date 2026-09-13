@@ -224,3 +224,7 @@ class MotionPlanItem(BaseModel):
     output_path: Optional[str] = None
     source_path: Optional[str] = None
     error: Optional[str] = None
+    # Records every engine tried and rejected before `engine_used` succeeded
+    # (or before every engine failed), so a fallback is always traceable in
+    # project metadata rather than silently substituted (spec V1.1 section 7).
+    fallback_log: list[str] = Field(default_factory=list)

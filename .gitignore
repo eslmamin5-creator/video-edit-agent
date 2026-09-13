@@ -23,6 +23,8 @@ npm-debug.log*
 
 # Project outputs (never commit user media/renders)
 edit/
+scratch/
+tests/output/
 *.mp4
 *.mov
 *.mkv
@@ -42,3 +44,6 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Local Claude Code tooling state (not project content)
+.claude/

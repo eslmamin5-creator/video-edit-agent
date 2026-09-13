@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from importlib import util as importlib_util
 
 from video_edit_agent.core.config import get_elevenlabs_key, get_gemini_key
+from video_edit_agent.core.verification_store import is_verified
 
 
 @dataclass
@@ -19,6 +20,7 @@ class Capability:
     name: str
     available: bool
     detail: str = ""
+    verified: bool | None = None  # None = not applicable; True/False = real-render acceptance ran or not
 
 
 def _which(cmd: str) -> bool:
@@ -74,7 +76,10 @@ def detect_whisper_cpp() -> Capability:
 
 def detect_gemini_key() -> Capability:
     key = get_gemini_key()
-    return Capability("gemini_key", key is not None, "set" if key else "missing GEMINI_API_KEY")
+    if not key:
+        return Capability("gemini_key", False, "missing GEMINI_API_KEY", verified=None)
+    verified, verified_detail = is_verified("gemini_live")
+    return Capability("gemini_key", True, f"API key detected; live {verified_detail}", verified=verified)
 
 
 def detect_elevenlabs_key() -> Capability:
@@ -83,13 +88,58 @@ def detect_elevenlabs_key() -> Capability:
 
 
 def detect_hyperframes() -> Capability:
-    ok = _pymodule("hyperframes") or _which("hyperframes")
-    return Capability("hyperframes", bool(ok), "available" if ok else "not installed (optional)")
+    """Installed does NOT mean usable: a package literally named "hyperframes"
+    exists on PyPI but is an unrelated N-dimensional DataFrame library with no
+    rendering API (confirmed during V1.1 hardening due-diligence) -- so this
+    checks for the actual `render_from_spec` entry point this project's
+    adapter calls, not just a successful bare import."""
+    installed = _pymodule("hyperframes")
+    has_real_api = False
+    if installed:
+        try:
+            import hyperframes  # type: ignore
+
+            has_real_api = hasattr(hyperframes, "render_from_spec")
+        except ImportError:
+            has_real_api = False
+    verified, verified_detail = is_verified("hyperframes")
+    if not installed:
+        detail = "not installed (optional)"
+    elif not has_real_api:
+        detail = "installed but missing render_from_spec -- not a real HyperFrames SDK"
+    else:
+        detail = f"installed, real API present; {verified_detail}"
+    return Capability("hyperframes", has_real_api, detail, verified=verified if has_real_api else None)
+
+
+def detect_mediapipe() -> Capability:
+    """Reports mask detection+caching verification only -- NOT full
+    behind-subject video compositing, which is architecturally unimplemented
+    (render/composition.py never consumes Overlay.behind_subject). Never
+    conflate this "verified" with "behind-subject rendering works"."""
+    from video_edit_agent.subject.detect import is_available as mediapipe_ok
+
+    ok = mediapipe_ok()
+    if not ok:
+        detail = (
+            "not installed, or installed version lacks mediapipe.solutions "
+            "(mediapipe>=1.0 removed it -- use mediapipe<1.0)"
+        )
+        return Capability("mediapipe (behind-subject)", False, detail)
+    verified, verified_detail = is_verified("mediapipe_segmentation")
+    detail = (
+        f"installed, legacy Solutions API present; segmentation+cache {verified_detail}. "
+        "NOTE: full behind-subject video compositing is NOT implemented in this codebase "
+        "(only detection/caching is real) -- see docs/known limitations."
+    )
+    return Capability("mediapipe (behind-subject)", True, detail, verified=verified)
 
 
 def detect_remotion() -> Capability:
     ok = detect_node().available and detect_npm().available
-    return Capability("remotion", ok, "renderable via npx" if ok else "requires Node.js + npm")
+    verified, verified_detail = is_verified("remotion")
+    detail = (f"renderable via npx; {verified_detail}") if ok else "requires Node.js + npm"
+    return Capability("remotion", ok, detail, verified=verified if ok else None)
 
 
 def detect_manim() -> Capability:
@@ -117,7 +167,7 @@ def full_capability_matrix() -> dict[str, Capability]:
         detect_ffmpeg, detect_ffprobe, detect_node, detect_npm, detect_gpu,
         detect_faster_whisper, detect_openai_whisper, detect_whisper_cpp,
         detect_gemini_key, detect_elevenlabs_key,
-        detect_hyperframes, detect_remotion, detect_manim,
+        detect_hyperframes, detect_mediapipe, detect_remotion, detect_manim,
         detect_claude_code, detect_codex,
     ]
     return {c().name: c() for c in checks}

@@ -14,12 +14,19 @@ def print_doctor_report(console: Console) -> None:
     matrix = full_capability_matrix()
     table = Table(title="videoedit doctor — capability matrix")
     table.add_column("Capability")
-    table.add_column("Status")
+    table.add_column("Installed/Configured")
+    table.add_column("Verified")
     table.add_column("Detail")
 
     for cap in matrix.values():
-        status = "[green]OK[/green]" if cap.available else "[yellow]unavailable[/yellow]"
-        table.add_row(cap.name, status, cap.detail)
+        status = "[green]yes[/green]" if cap.available else "[yellow]no[/yellow]"
+        if cap.verified is None:
+            verified = "n/a"
+        elif cap.verified:
+            verified = "[green]yes[/green]"
+        else:
+            verified = "[yellow]not yet[/yellow]"
+        table.add_row(cap.name, status, verified, cap.detail)
 
     console.print(table)
 
