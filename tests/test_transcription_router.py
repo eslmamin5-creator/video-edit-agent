@@ -33,12 +33,21 @@ def test_explicit_provider_short_circuits_priority_list():
     assert router._candidate_order() == ["elevenlabs"]
 
 
-def test_no_api_keys_never_raises_before_reaching_local_provider(tmp_path):
-    """With no keys and no local model actually loadable in the test env, the
-    router must still *attempt* faster-whisper last and report why every
-    attempt failed — it must never claim a cloud provider is available."""
+def test_no_api_keys_never_raises_before_reaching_local_provider(tmp_path, monkeypatch):
+    """With no keys and no local model actually loadable, the router must
+    still *attempt* faster-whisper last and report why every attempt failed —
+    it must never claim a cloud provider is available.
+
+    faster-whisper's own availability is force-failed here so this test stays
+    fast and deterministic regardless of whether the `[local]` extra happens
+    to be installed in the environment running the suite (real model
+    load/inference is exercised separately, not in this unit test)."""
     cfg = TranscriptionConfig()
     router = TranscriptionRouter(cfg, offline=False)
+    monkeypatch.setattr(
+        router.providers["faster-whisper"], "is_available",
+        lambda offline=False: (False, "forced unavailable for test speed/determinism"),
+    )
     attempts = []
     fake_audio = tmp_path / "audio.wav"
     fake_audio.write_bytes(b"\x00")
@@ -60,6 +69,11 @@ def test_offline_mode_skips_cloud_providers_entirely(tmp_path, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "fake-key-should-be-ignored-offline")
     cfg = TranscriptionConfig()
     router = TranscriptionRouter(cfg, offline=True)
+    for name in ("faster-whisper", "openai-whisper", "whisper.cpp"):
+        monkeypatch.setattr(
+            router.providers[name], "is_available",
+            lambda offline=False: (False, "forced unavailable for test speed/determinism"),
+        )
     attempts = []
     fake_audio = tmp_path / "audio.wav"
     fake_audio.write_bytes(b"\x00")
