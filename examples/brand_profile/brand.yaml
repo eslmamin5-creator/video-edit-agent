@@ -1,0 +1,37 @@
+# Example Brand Profile — copy into brands/<your-brand-name>/brand.yaml
+# (created for you automatically by `videoedit brand init <name>`; this file
+# just shows a filled-in, realistic example of every field).
+name: acme
+language:
+  primary: ar
+  tone: simple
+colors:
+  primary: "#0B3D2E"
+  secondary: "#FFFFFF"
+  accent: "#E7B10A"
+fonts:
+  - Cairo
+logo_rules: "Logo stays in the top-right safe zone, never over captions."
+captions:
+  preset: word-highlight
+  rtl: true
+  max_lines: 2
+  word_highlight: true
+  font: Cairo
+  primary_color: "#FFFFFF"
+  highlight_color: "#E7B10A"
+motion:
+  energy: medium
+  avoid:
+    - flashing effects
+  preferred_engine: remotion
+broll_aesthetic: "warm, natural light, minimal text overlays"
+cta:
+  style: minimal
+  text_default: "تابعنا لمزيد"
+safe_zones:
+  top: 0.08
+  bottom: 0.12
+preferred_aspect_ratio: "9:16"
+avoid:
+  - stock footage with visible watermarks

@@ -1,0 +1,14 @@
+{
+  "name": "video-edit-agent",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Repo-root package manifest for video-edit-agent. The Python package under src/video_edit_agent is the actual distributable; this file only exists to scope Node tooling used by the bundled Remotion motion-graphics template.",
+  "workspaces": [
+    "src/video_edit_agent/motion/remotion/template"
+  ],
+  "scripts": {
+    "remotion:install": "npm install --prefix src/video_edit_agent/motion/remotion/template",
+    "remotion:preview": "npm run --prefix src/video_edit_agent/motion/remotion/template preview"
+  },
+  "license": "MIT"
+}
