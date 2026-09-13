@@ -48,11 +48,24 @@ def _ensure_template_copied(project_root: Path) -> Path:
     return dest
 
 
+def _resolve(cmd: str) -> str:
+    """Resolve a Node-toolchain command to its full path.
+
+    On Windows, npm/npx are `.cmd` shims; `subprocess.run(["npm", ...])`
+    without going through the shell raises `FileNotFoundError` because
+    `CreateProcess` doesn't apply PATHEXT resolution the way cmd.exe does.
+    `shutil.which` does that resolution for us on every platform."""
+    resolved = shutil.which(cmd)
+    if not resolved:
+        raise RemotionUnavailable(f"'{cmd}' not found on PATH")
+    return resolved
+
+
 def _ensure_deps_installed(template_dest: Path) -> None:
     if (template_dest / "node_modules").exists():
         return
     result = subprocess.run(
-        ["npm", "install", "--no-audit", "--no-fund"],
+        [_resolve("npm"), "install", "--no-audit", "--no-fund"],
         cwd=str(template_dest),
         capture_output=True,
         text=True,
@@ -86,16 +99,26 @@ def render(spec: AnimationSpec, project_root: Path, output_path: Path, fps: int 
     template_dest = _ensure_template_copied(project_root)
     _ensure_deps_installed(template_dest)
 
+    # The render subprocess is launched with cwd=template_dest (below), so any
+    # relative path handed to it on the command line resolves against that
+    # directory, not the caller's cwd. project_root/output_path may well be
+    # relative (e.g. `videoedit edit sample.mp4` from the project dir) --
+    # resolve to absolute paths before building the command.
+    output_path = output_path.resolve()
     props = _props_for_spec(spec)
-    props_path = template_dest / f"_props_{slot_id}.json"
+    props_path = (template_dest / f"_props_{slot_id}.json").resolve()
     props_path.write_text(json.dumps(props, ensure_ascii=False, indent=2), encoding="utf-8")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     duration_frames = max(1, round((spec.timeline_end - spec.timeline_start) * fps))
-    composition_id = spec.kind.value if hasattr(spec.kind, "value") else str(spec.kind)
+    # Remotion composition ids may only contain [a-zA-Z0-9-]; AnimationKind
+    # values are snake_case (e.g. "hook_title"), so translate to match the
+    # hyphenated ids registered in template/src/Root.tsx.
+    kind_value = spec.kind.value if hasattr(spec.kind, "value") else str(spec.kind)
+    composition_id = kind_value.replace("_", "-")
     cmd = [
-        "npx",
+        _resolve("npx"),
         "remotion",
         "render",
         "src/index.ts",

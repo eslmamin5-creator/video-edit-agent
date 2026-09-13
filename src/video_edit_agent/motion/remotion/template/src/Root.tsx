@@ -24,7 +24,7 @@ export const RemotionRoot: React.FC = () => {
   return (
     <>
       <Composition
-        id="hook_title"
+        id="hook-title"
         component={HookTitle}
         durationInFrames={DEFAULT_DURATION}
         fps={FPS}
@@ -32,7 +32,7 @@ export const RemotionRoot: React.FC = () => {
         defaultProps={{ text: "Hook Title", theme: defaultTheme }}
       />
       <Composition
-        id="lower_third"
+        id="lower-third"
         component={LowerThird}
         durationInFrames={DEFAULT_DURATION}
         fps={FPS}
@@ -40,7 +40,7 @@ export const RemotionRoot: React.FC = () => {
         defaultProps={{ name: "Name", subtitle: "Title", theme: defaultTheme }}
       />
       <Composition
-        id="stat_counter"
+        id="stat-counter"
         component={StatCounter}
         durationInFrames={DEFAULT_DURATION}
         fps={FPS}
@@ -68,7 +68,7 @@ export const RemotionRoot: React.FC = () => {
         }}
       />
       <Composition
-        id="feature_card"
+        id="feature-card"
         component={FeatureCard}
         durationInFrames={DEFAULT_DURATION}
         fps={FPS}
@@ -84,7 +84,7 @@ export const RemotionRoot: React.FC = () => {
         defaultProps={{ text: "Call to action", actionLabel: "Learn more", theme: defaultTheme }}
       />
       <Composition
-        id="logo_reveal"
+        id="logo-reveal"
         component={LogoReveal}
         durationInFrames={DEFAULT_DURATION}
         fps={FPS}
@@ -92,7 +92,7 @@ export const RemotionRoot: React.FC = () => {
         defaultProps={{ brandName: "Brand", theme: defaultTheme }}
       />
       <Composition
-        id="metric_highlight"
+        id="metric-highlight"
         component={MetricHighlight}
         durationInFrames={DEFAULT_DURATION}
         fps={FPS}
@@ -100,7 +100,7 @@ export const RemotionRoot: React.FC = () => {
         defaultProps={{ metric: "Metric", value: "42", trend: "up" as const, theme: defaultTheme }}
       />
       <Composition
-        id="product_callout"
+        id="product-callout"
         component={ProductCallout}
         durationInFrames={DEFAULT_DURATION}
         fps={FPS}
@@ -108,7 +108,7 @@ export const RemotionRoot: React.FC = () => {
         defaultProps={{ label: "Callout", x: 200, y: 300, theme: defaultTheme }}
       />
       <Composition
-        id="timeline_graphic"
+        id="timeline-graphic"
         component={TimelineGraphic}
         durationInFrames={DEFAULT_DURATION}
         fps={FPS}

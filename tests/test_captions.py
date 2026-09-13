@@ -105,3 +105,14 @@ def test_resolve_style_applies_brand_overrides_without_mutating_preset():
     styled = resolve_style("minimal", {"font_size": 99})
     assert styled.font_size == 99
     assert PRESETS["minimal"].font_size == original_size  # preset dict itself untouched
+
+
+def test_resolve_style_maps_brand_font_field_to_font_ar_and_font_en():
+    """Brand.captions.model_dump() emits a single 'font' key (see
+    brand/schema.py's BrandCaptions), not 'font_ar'/'font_en' — resolve_style
+    must translate it, otherwise a brand's font is silently dropped and the
+    rendered captions fall back to the preset's default (regression: brand
+    fonts never reached rendered .ass output before this was fixed)."""
+    styled = resolve_style("minimal", {"font": "Cairo"})
+    assert styled.font_ar == "Cairo"
+    assert styled.font_en == "Cairo"

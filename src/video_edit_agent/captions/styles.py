@@ -48,6 +48,11 @@ def resolve_style(name: str, brand_overrides: dict | None = None) -> CaptionStyl
     base = PRESETS.get(name, PRESETS["minimal"])
     if not brand_overrides:
         return base
+    overrides = dict(brand_overrides)
+    font = overrides.pop("font", None)
+    if font:
+        overrides.setdefault("font_ar", font)
+        overrides.setdefault("font_en", font)
     data = base.__dict__.copy()
-    data.update({k: v for k, v in brand_overrides.items() if k in data})
+    data.update({k: v for k, v in overrides.items() if k in data})
     return CaptionStyle(**data)
