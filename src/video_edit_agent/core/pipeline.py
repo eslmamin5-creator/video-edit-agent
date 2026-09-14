@@ -168,7 +168,9 @@ def run_pipeline(
 
         motion_output_dir = paths.cache_dir / "motion"
         for i, spec in enumerate(specs):
-            item = render_motion(spec, paths.root, motion_output_dir, brand=brand, fps=edl.fps, slot_id=f"motion{i}")
+            item = render_motion(
+                spec, paths.root, motion_output_dir, brand=brand, fps=edl.fps, slot_id=f"motion{i}", offline=offline
+            )
             motion_items.append(item)
             if not item.output_path:
                 continue

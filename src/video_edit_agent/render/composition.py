@@ -26,6 +26,7 @@ class Overlay:
     x: str = "(W-w)/2"
     y: str = "(H-h)/2"
     behind_subject: bool = False  # reserved for spec section 16 layering
+    scale_to_canvas: bool = False  # scale+crop this overlay to cover the full canvas (Creator B-roll of arbitrary aspect ratio)
 
 
 @dataclass
@@ -96,10 +97,18 @@ def build_filter_complex(plan: RenderPlan) -> tuple[list[str], str, str]:
     for j, ov in enumerate(plan.overlays):
         inputs += ["-i", str(ov.path)]
         ov_input = overlay_idx_offset + j
+        ov_label = f"{ov_input}:v"
+        if ov.scale_to_canvas:
+            scaled_label = f"ovscaled{j}"
+            filters.append(
+                f"[{ov_input}:v]scale={edl.width}:{edl.height}:force_original_aspect_ratio=increase,"
+                f"crop={edl.width}:{edl.height}[{scaled_label}]"
+            )
+            ov_label = scaled_label
         new_label = f"vov{j}"
         enable = f"between(t,{ov.start:.3f},{ov.end:.3f})"
         filters.append(
-            f"[{video_out}][{ov_input}:v]overlay=x={ov.x}:y={ov.y}:enable='{enable}'[{new_label}]"
+            f"[{video_out}][{ov_label}]overlay=x={ov.x}:y={ov.y}:enable='{enable}'[{new_label}]"
         )
         video_out = new_label
 

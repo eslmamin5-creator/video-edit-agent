@@ -68,24 +68,30 @@ def render_motion(
     brand: Brand | None = None,
     fps: int = 30,
     slot_id: str = "slot",
+    offline: bool = False,
 ) -> MotionPlanItem:
     """Try each engine in priority order; return a MotionPlanItem recording
     which engine actually produced output (or the last error if the `simple`
-    engine itself somehow failed, which should not normally happen)."""
+    engine itself somehow failed, which should not normally happen).
+
+    In offline mode, Remotion is skipped unless its node_modules are already
+    cached locally (installing them requires network access)."""
     fallback_log: list[str] = []
 
     for engine in _engine_priority(spec, brand):
         try:
             if engine == MotionEngine.REMOTION:
                 out_path = output_dir / f"{slot_id}_remotion.webm"
-                result = remotion_adapter.render(spec, project_root, out_path, fps=fps, slot_id=slot_id)
+                result = remotion_adapter.render(
+                    spec, project_root, out_path, fps=fps, slot_id=slot_id, offline=offline
+                )
             elif engine == MotionEngine.MANIM:
                 result = manim_adapter.render(spec, output_dir)
             elif engine == MotionEngine.HYPERFRAMES:
                 result = hyperframes_adapter.render(spec, output_dir)
             else:
                 out_path = output_dir / f"{slot_id}_simple.png"
-                result = simple_engine.render_animation(spec, out_path)
+                result = simple_engine.render_animation(spec, out_path, brand=brand)
 
             return MotionPlanItem(
                 spec=spec, engine_used=engine, output_path=str(result), fallback_log=fallback_log

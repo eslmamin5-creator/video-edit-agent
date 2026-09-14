@@ -18,6 +18,8 @@ import typer
 from rich.console import Console
 
 from video_edit_agent import __version__
+from video_edit_agent.agents.creator.parser import ScriptParseError
+from video_edit_agent.agents.creator.pipeline import run_creator
 from video_edit_agent.brand.loader import BrandNotFoundError, init_brand, load_brand
 from video_edit_agent.brand.validator import validate_brand
 from video_edit_agent.cli import config as config_cli
@@ -116,6 +118,40 @@ def edit(
     console.print(t("render_success", lang))
     console.print(f"Output: {result.final_output}")
     console.print(f"Project files: {result.project_dir}")
+    if result.qa_report and result.qa_report.issues:
+        console.print(f"QA issues: {len(result.qa_report.issues)} (see project.md for detail)")
+
+
+@app.command()
+def create(
+    script: Path = typer.Argument(..., exists=True, help="Path to the source script (.txt/.md/.docx/.pdf)."),
+    brand: Optional[str] = typer.Option(None, "--brand", help="Brand profile name under brands/."),
+    style: str = typer.Option("mixed", "--style", help="Visual style: motion|cinematic|infographic|mixed."),
+    preset: str = typer.Option("reel", "--preset", help="Export preset: reel|tiktok|shorts|square|landscape."),
+    offline: bool = typer.Option(False, "--offline", help="Block all cloud calls; local-only Creator pipeline."),
+):
+    """Generate a video from a script: analysis -> scenes -> storyboard -> asset plan -> MasterTimeline -> render -> QA."""
+    lang = _lang()
+    if offline:
+        console.print(t("offline_mode", lang))
+
+    try:
+        result = run_creator(script, brand_name=brand, style=style, offline=offline, preset_name=preset)
+    except ScriptParseError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    except ValueError as exc:
+        console.print(f"[red]Invalid --style: {exc}[/red]")
+        raise typer.Exit(code=1)
+
+    if result.final_output is None:
+        console.print(t("error_generic", lang, message="; ".join(result.warnings) or "Creator did not complete"))
+        raise typer.Exit(code=1)
+
+    console.print(t("render_success", lang))
+    console.print(f"Output: {result.final_output}")
+    console.print(f"Project files: {result.project_dir}")
+    console.print(f"Scenes: {len(result.scenes)}")
     if result.qa_report and result.qa_report.issues:
         console.print(f"QA issues: {len(result.qa_report.issues)} (see project.md for detail)")
 

@@ -61,9 +61,14 @@ def _resolve(cmd: str) -> str:
     return resolved
 
 
-def _ensure_deps_installed(template_dest: Path) -> None:
+def _ensure_deps_installed(template_dest: Path, offline: bool = False) -> None:
     if (template_dest / "node_modules").exists():
         return
+    if offline:
+        raise RemotionUnavailable(
+            "Remotion node_modules are not cached and installing them requires network "
+            "access, which is disallowed in --offline mode."
+        )
     result = subprocess.run(
         [_resolve("npm"), "install", "--no-audit", "--no-fund"],
         cwd=str(template_dest),
@@ -87,17 +92,26 @@ def _props_for_spec(spec: AnimationSpec) -> dict:
     return base
 
 
-def render(spec: AnimationSpec, project_root: Path, output_path: Path, fps: int = 30, slot_id: str = "slot") -> Path:
+def render(
+    spec: AnimationSpec,
+    project_root: Path,
+    output_path: Path,
+    fps: int = 30,
+    slot_id: str = "slot",
+    offline: bool = False,
+) -> Path:
     """Render a single AnimationSpec to a transparent WebM via Remotion.
 
     Raises RemotionUnavailable if Node/npm/template are missing, or
-    RemotionRenderError if the render itself fails.
+    RemotionRenderError if the render itself fails. In offline mode, this
+    raises RemotionUnavailable rather than installing node_modules over the
+    network, so the motion router falls back to a fully local engine.
     """
     if not is_available():
         raise RemotionUnavailable("Node.js/npm or Remotion template not available")
 
     template_dest = _ensure_template_copied(project_root)
-    _ensure_deps_installed(template_dest)
+    _ensure_deps_installed(template_dest, offline=offline)
 
     # The render subprocess is launched with cwd=template_dest (below), so any
     # relative path handed to it on the command line resolves against that

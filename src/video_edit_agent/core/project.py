@@ -87,6 +87,26 @@ class ProjectPaths:
     def broll_plan(self) -> Path:
         return self.edit_dir / "broll_plan.json"
 
+    @property
+    def script_analysis_json(self) -> Path:
+        return self.edit_dir / "script_analysis.json"
+
+    @property
+    def scenes_json(self) -> Path:
+        return self.edit_dir / "scenes.json"
+
+    @property
+    def storyboard_json(self) -> Path:
+        return self.edit_dir / "storyboard.json"
+
+    @property
+    def storyboard_md(self) -> Path:
+        return self.edit_dir / "storyboard.md"
+
+    @property
+    def asset_plan_json(self) -> Path:
+        return self.edit_dir / "asset_plan.json"
+
 
 @dataclass
 class ProjectMemory:
@@ -103,6 +123,11 @@ class ProjectMemory:
     render_history: list[str] = field(default_factory=list)
     qa_issues: list[str] = field(default_factory=list)
     outstanding: list[str] = field(default_factory=list)
+    workflow: str = "editor"  # "editor" | "creator" | "assembler"
+    scene_count: int = 0
+    storyboard_status: str = ""
+    asset_plan_status: str = ""
+    master_timeline_path: str = ""
 
     def log_decision(self, text: str) -> None:
         self.decisions.append(f"[{_now()}] {text}")
@@ -120,9 +145,19 @@ class ProjectMemory:
             "## Editorial Intent",
             self.intent or "_(none recorded)_",
             "",
+            f"## Workflow\n{self.workflow}",
+            "",
             f"## Brand\n{self.brand or '_(none)_'}",
             "",
             f"## Style\n{self.style or '_(none)_'}",
+            "",
+            f"## Scene Count\n{self.scene_count or '_(none)_'}",
+            "",
+            f"## Storyboard Status\n{self.storyboard_status or '_(none)_'}",
+            "",
+            f"## Asset Plan Status\n{self.asset_plan_status or '_(none)_'}",
+            "",
+            f"## MasterTimeline\n{self.master_timeline_path or '_(none)_'}",
             "",
             "## Preferences",
             _bullets([f"{k}: {v}" for k, v in self.preferences.items()]) or "_(none)_",
@@ -173,6 +208,11 @@ class ProjectMemory:
             "render_history": self.render_history,
             "qa_issues": self.qa_issues,
             "outstanding": self.outstanding,
+            "workflow": self.workflow,
+            "scene_count": self.scene_count,
+            "storyboard_status": self.storyboard_status,
+            "asset_plan_status": self.asset_plan_status,
+            "master_timeline_path": self.master_timeline_path,
         }
         sidecar.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
