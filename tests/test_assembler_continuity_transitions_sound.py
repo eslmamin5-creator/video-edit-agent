@@ -56,9 +56,10 @@ def test_transitions_recommend_crossfade_on_high_severity_brightness_jump():
     findings = analyze_continuity(analyses)
     decisions = plan_transitions(["a", "b"], findings)
     assert decisions[0].type == TransitionKind.SHORT_CROSSFADE
-    # Real video crossfade isn't wired into the renderer yet -- must be
-    # honestly recorded as a recommendation, never silently faked.
-    assert decisions[0].applied is False
+    # The shared render core now genuinely renders this as an xfade/
+    # acrossfade crossfade (Phase 2 Finalization spec section 2), so it is
+    # honestly markable as applied.
+    assert decisions[0].applied is True
 
 
 def test_sound_plan_flags_silent_audio_track():

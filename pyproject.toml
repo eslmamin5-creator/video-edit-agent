@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "video-edit-agent"
-version = "0.1.1"
+version = "0.2.0"
 description = "Arabic-first, provider-agnostic AI video editing agent (CLI: videoedit)"
 readme = "README.md"
 requires-python = ">=3.10"

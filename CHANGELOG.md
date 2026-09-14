@@ -3,6 +3,63 @@
 All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.2.0] - 2026-09-14
+
+Phase 2 finalization: Creator and Assembler agents, real rendered video
+transitions, and real loudness normalization, on top of the multi-agent
+production engine added in Phase 2. No new agents beyond Editor/Creator/
+Assembler, no product-scope expansion, no GUI/NLE work, no Veo/cloud
+generation — see the Phase 2 Finalization spec for full scope.
+
+### Added
+- Real, rendered video transitions in the Assembler's finished film: hard
+  cut, short crossfade, and dissolve are genuinely rendered via ffmpeg
+  `xfade`/`acrossfade` (not just planned). A transition is only ever
+  reported `applied=true` when the renderer actually produced that effect.
+- Configurable, conservative transition durations (0.15s-0.5s band) via
+  `core/transition_math.py::clamp_transition_duration()`, with timeline
+  duration math that correctly accounts for overlapping crossfade regions
+  (no A/V desync).
+- Audio crossfade (`acrossfade`) accompanying a visual crossfade whenever
+  both neighboring clips have real audio; falls back to a plain concat when
+  only one side does, instead of forcing a crossfade onto silence.
+- Real, conservative loudness normalization in the Assembler
+  (`agents/assembler/loudness.py`) using ffmpeg `loudnorm`: only scenes that
+  deviate from the target level are normalized; true digital silence is
+  left untouched via a `SILENCE_FLOOR_DB` guard (avoids a `loudnorm` NaN
+  failure mode on pure silence). Every decision records whether
+  normalization was required/applied and at what target level.
+- New acceptance/regression tests (`tests/test_phase2_transitions_loudness.py`):
+  crossfade output-duration and blended-frame verification, dissolve/
+  crossfade equivalence, audio-crossfade gating, loudness planning
+  (including the silence-floor edge case), and a full Assembler finish
+  acceptance with at least one real applied transition and no clipping.
+- Real, offline, end-to-end acceptance runs for all three workflows: Editor
+  (`edit --offline`), Creator (`create --offline`, exercised against the
+  `acme_test` Brand Profile), and Assembler (`assemble --rough --offline`
+  then `--finish --offline`).
+
+### Fixed
+- ffmpeg `xfade`/`acrossfade` timebase mismatch between a freshly-trimmed
+  clip and an already-concatenated accumulator, which previously made
+  crossfade rendering fail outright (`render/composition.py`, via explicit
+  `settb=AVTB`/`asettb=AVTB` before every `xfade`/`acrossfade`).
+- QA (`agents/assembler/qa.py::check_timeline_continuity`) previously
+  flagged any negative timeline gap as an "impossible overlap" error, which
+  broke once real crossfades started legitimately overlapping clip
+  boundaries; now compares the observed overlap against the boundary
+  clip's own declared `transition_duration_s`.
+
+### Known limitations
+- J-Cut/L-Cut (audio-lead/audio-trail edits) remain conceptual only — the
+  Transition Director never proposes one. Deferred intentionally; not a
+  release blocker.
+- HyperFrames motion engine remains unavailable/unverified in this
+  environment (see 0.1.1 notes); the router's traceable fallback to a
+  working engine is unaffected and remains verified.
+- Behind-Subject video compositing (rendering an element visibly behind a
+  subject) remains unimplemented — unchanged from 0.1.1.
+
 ## [0.1.1] - 2026-09-13
 
 Hardening pass: verify Arabic, motion, and provider integrations before

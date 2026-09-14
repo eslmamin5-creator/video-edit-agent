@@ -4,11 +4,13 @@ Restrained by design -- never mechanically dissolve every boundary.
 
 `applied` reflects what the shared render core can actually do today: real
 audio-only bridging (via the existing `audio_fade_in_ms`/`audio_fade_out_ms`
-de-click fades on `EDLClip`) is wired and markable `applied=True`; true
-visual crossfade/dissolve and J-cut/L-cut (independent audio/video trim
-windows) have no renderer support yet, so they are recorded as
-recommendations only (`applied=False`) -- see spec section 20's "do not
-fake it in the report."
+de-click fades on `EDLClip`) and a real visual crossfade (via `xfade` +
+`acrossfade` in the shared render core, Phase 2 Finalization spec section 2)
+are both wired and markable `applied=True`. J-cut/L-cut (independent
+audio/video trim windows) still has no renderer support, so it remains a
+recommendation only (`applied=False`) -- see spec section 20's "do not fake
+it in the report" and section 9, which explicitly allows J-cut/L-cut to stay
+unimplemented for this milestone.
 """
 from __future__ import annotations
 
@@ -38,9 +40,9 @@ def _decide(a: str, b: str, findings: list[ContinuityFinding]) -> TransitionDeci
     brightness_high = next((f for f in high if f.category == "brightness"), None)
 
     if brightness_high is not None:
-        # A real visual jump benefits from a brief bridge, but we only have
-        # an audio-side fade wired today -- apply that, and recommend the
-        # (not-yet-implemented) visual crossfade honestly as unapplied.
+        # A real visual jump benefits from a brief bridge -- the shared
+        # render core now genuinely renders this as an `xfade`/`acrossfade`
+        # crossfade, so it is honestly markable `applied=True`.
         return TransitionDecision(
             from_scene=a,
             to_scene=b,
@@ -48,7 +50,7 @@ def _decide(a: str, b: str, findings: list[ContinuityFinding]) -> TransitionDeci
             duration=SHORT_CROSSFADE_DURATION,
             reason=brightness_high.description,
             confidence=brightness_high.confidence,
-            applied=False,
+            applied=True,
         )
 
     medium = [f for f in findings if f.severity == ContinuitySeverity.MEDIUM]

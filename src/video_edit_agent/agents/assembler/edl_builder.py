@@ -19,6 +19,7 @@ from pathlib import Path
 from video_edit_agent.agents.assembler.schemas import SceneInventoryItem, TransitionDecision, TransitionKind
 from video_edit_agent.core.media import MediaError, run
 from video_edit_agent.core.schemas import EDL, CutReason, EDLClip, TransitionType
+from video_edit_agent.core.transition_math import clamp_transition_duration
 
 _TRANSITION_MAP = {
     TransitionKind.SHORT_CROSSFADE: TransitionType.CROSSFADE,
@@ -31,7 +32,12 @@ _TRANSITION_MAP = {
     TransitionKind.BRANDED: TransitionType.CROSSFADE,
     TransitionKind.HARD_CUT: TransitionType.HARD_CUT,
 }
-_AUDIO_BRIDGE_KINDS = {TransitionKind.AUDIO_BRIDGE, TransitionKind.SHORT_CROSSFADE, TransitionKind.DISSOLVE}
+# Kinds that get a REAL rendered video crossfade (`xfade`/`acrossfade` in the
+# shared render core, spec Phase 2 Finalization section 2) -- distinct from
+# `_AUDIO_BRIDGE_KINDS` below, which only ever gets the older audio-only
+# `afade` de-click treatment.
+_VIDEO_CROSSFADE_KINDS = {TransitionKind.SHORT_CROSSFADE, TransitionKind.DISSOLVE}
+_AUDIO_BRIDGE_KINDS = {TransitionKind.AUDIO_BRIDGE}
 
 
 class EDLBuildError(RuntimeError):
@@ -69,14 +75,17 @@ def build_scene_edl(
     fps: float,
     cache_dir: Path,
     transitions: list[TransitionDecision] | None = None,
+    loudness_targets: dict[str, float] | None = None,
 ) -> EDL:
     if not ordered_items:
         raise EDLBuildError("Cannot build an EDL from zero scenes.")
 
     transitions_by_from = {t.from_scene: t for t in (transitions or [])}
+    loudness_targets = loudness_targets or {}
 
     clips: list[EDLClip] = []
     cursor = 0.0
+    prev_duration = 0.0
     for i, item in enumerate(ordered_items):
         source_path = _ensure_has_audio(item, cache_dir)
         duration = max(0.0, item.duration)
@@ -94,26 +103,40 @@ def build_scene_edl(
         incoming = transitions_by_from.get(ordered_items[i - 1].id) if i > 0 else None
         transition_in = TransitionType.HARD_CUT
         audio_fade_in_ms = 0
+        transition_duration_s = 0.0
         if incoming is not None:
             transition_in = _TRANSITION_MAP.get(incoming.type, TransitionType.HARD_CUT)
-            if incoming.applied and incoming.type in _AUDIO_BRIDGE_KINDS:
+            if incoming.applied and incoming.type in _VIDEO_CROSSFADE_KINDS:
+                # A real, rendered crossfade -- the timeline overlaps by `d`
+                # seconds, so both this clip's `timeline_in` and the running
+                # cursor must account for it (spec Phase 2 Finalization
+                # section 3: "do not introduce A/V desynchronization").
+                transition_duration_s = clamp_transition_duration(incoming.duration, prev_duration, duration)
+            elif incoming.applied and incoming.type in _AUDIO_BRIDGE_KINDS:
                 audio_fade_in_ms = int(incoming.duration * 1000)
+
+        timeline_in = cursor - transition_duration_s if transition_duration_s > 0 else cursor
+        timeline_out = timeline_in + duration
 
         clips.append(
             EDLClip(
                 source_file=source_path,
                 source_in=0.0,
                 source_out=duration,
-                timeline_in=cursor,
-                timeline_out=cursor + duration,
+                timeline_in=timeline_in,
+                timeline_out=timeline_out,
                 reason=CutReason.MANUAL,
                 transition_in=transition_in,
                 transition_out=transition_out,
+                transition_duration_s=transition_duration_s,
+                has_real_audio=item.has_audio,
+                loudnorm_target_db=loudness_targets.get(item.id),
                 audio_fade_in_ms=audio_fade_in_ms,
                 audio_fade_out_ms=audio_fade_out_ms,
             )
         )
-        cursor += duration
+        cursor = timeline_out
+        prev_duration = duration
 
     if not clips:
         raise EDLBuildError("All scenes had zero duration; nothing to assemble.")

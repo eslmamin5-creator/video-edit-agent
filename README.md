@@ -6,6 +6,12 @@ offline if you want, or enhanced by cloud providers if you give it API keys.
 
 CLI command: `videoedit`. See [README.ar.md](README.ar.md) for the Arabic version.
 
+Three agents cover three workflows, all offline-capable:
+
+- **Editor** (`videoedit edit`) — turns one raw take into a captioned, cut final video.
+- **Creator** (`videoedit create`) — turns a script into a full storyboard, asset plan, and rendered final video.
+- **Assembler** (`videoedit assemble`) — turns a folder of pre-shot scenes into a rough cut (`--rough`) and then a finished film (`--finish`) with real transitions and loudness normalization between scenes.
+
 ## Philosophy
 
 - **Arabic-first, dialect-preserving.** The agent transcribes exactly what was
@@ -57,6 +63,9 @@ and QA/B-roll/motion plan JSON files.
 | Command | Purpose |
 |---|---|
 | `videoedit edit <video>` | Run the full pipeline: transcribe -> cut -> caption -> B-roll -> motion -> render -> QA |
+| `videoedit create <script>` | Turn a script into storyboard -> asset plan -> motion -> render -> QA |
+| `videoedit assemble <scenes_dir> --rough` | Build a fast rough cut from a folder of pre-shot scenes |
+| `videoedit assemble <scenes_dir> --finish` | Finish the film: real transitions + loudness normalization between scenes, reusing the rough cut's plan |
 | `videoedit doctor` | Print the capability matrix (ffmpeg, Node, providers, engines) |
 | `videoedit providers` | List transcription/motion providers and their availability |
 | `videoedit setup` | Interactive first-run wizard |
@@ -64,7 +73,7 @@ and QA/B-roll/motion plan JSON files.
 | `videoedit brand init / validate` | Create or validate a Brand Profile |
 | `videoedit project inspect <dir>` | Print a project's `project.md` memory |
 
-## Capability status (as of v0.1.1 hardening)
+## Capability status (as of v0.2.0)
 
 Honest per-capability status, using six categories:
 `VERIFIED LOCALLY` (a real, non-mocked local acceptance run passed),
@@ -87,7 +96,11 @@ acceptance evidence), `REQUIRES API KEY` (blocked until you set one). Run
 | Behind-Subject mask detection + caching | VERIFIED LOCALLY | Real (non-mocked) mediapipe segmentation runs against a real video fixture, and a second identical call reuses the cached mask instead of recomputing (`scripts/behind_subject_acceptance.py`, `tests/test_behind_subject.py`). Requires `mediapipe<1.0` (e.g. `mediapipe==0.10.21`) — mediapipe 1.0+ removed the API this project uses. |
 | Behind-Subject video compositing (element rendered visibly behind a subject in the final output) | NOT VERIFIED | This is a real architecture gap, not just an unverified feature: `render/composition.py` never reads `Overlay.behind_subject`, so no code path in this repository can produce that visual result yet. Only the detection/caching half above is real. A permanent characterization test locks this in so it can't be silently claimed "fixed" later. |
 | Brand Profiles | VERIFIED LOCALLY | Brand-driven fonts/colors/caption presets confirmed to reach the actual render pipeline. |
-| Offline mode (no API keys) | VERIFIED LOCALLY | `videoedit edit --offline` produces `final.mp4` end-to-end with zero network calls. |
+| Offline mode (no API keys) | VERIFIED LOCALLY | `videoedit edit --offline`, `videoedit create --offline`, and `videoedit assemble --offline` each produce a valid `final.mp4` end-to-end with zero network calls. |
+| Real video transitions (hard cut, short crossfade, dissolve) rendered by Assembler | VERIFIED LOCALLY | The Transition Director's plan is genuinely rendered via ffmpeg `xfade` (video) — a transition is only ever reported `applied=true` when the renderer actually produced that effect. Crossfade acceptance test verifies output duration reflects the overlap and that intermediate frames contain real blended content, not a hard cut (`tests/test_phase2_transitions_loudness.py`). Dissolve reuses the same `xfade` mechanics as short crossfade by design — there is no meaningfully different underlying effect to implement separately. |
+| Audio crossfade accompanying a visual crossfade | VERIFIED LOCALLY | When both clips on either side of a visual crossfade have real audio, ffmpeg `acrossfade` is applied so there's no click or abrupt volume jump; if only one side has real audio, the audio falls back to a plain concat instead of being forced into a crossfade. |
+| Loudness normalization (Assembler) | VERIFIED LOCALLY | Conservative `loudnorm`-based normalization: only scenes that deviate from the target level are normalized, true digital silence is left untouched (avoids a known ffmpeg `loudnorm` NaN failure mode on pure silence), and every decision records whether normalization was required/applied and at what target. Acceptance test verifies no clipping in the final render (`tests/test_phase2_transitions_loudness.py`). |
+| J-Cut / L-Cut audio-lead/audio-trail edits | NOT IMPLEMENTED | Conceptual only — the Transition Director never proposes one. Intentionally deferred past v0.2.0; not a release blocker. |
 
 ## Secrets
 

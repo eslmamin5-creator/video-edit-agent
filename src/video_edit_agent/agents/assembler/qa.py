@@ -76,13 +76,19 @@ def check_timeline_continuity(edl: EDL) -> list[QAIssue]:
                 )
             )
         elif gap < -OVERLAP_TOLERANCE_S:
-            issues.append(
-                QAIssue(
-                    category="technical", severity=QASeverity.ERROR,
-                    message=f"Impossible timeline overlap of {-gap:.2f}s between clips at {a.timeline_out:.2f}s",
-                    timeline_at=a.timeline_out, auto_repairable=False,
+            # A negative gap is expected -- not an error -- when it matches a
+            # real rendered crossfade's overlap region (Phase 2 Finalization
+            # spec section 3); only flag it when it exceeds what `b`'s own
+            # transition duration accounts for.
+            expected_overlap = b.transition_duration_s
+            if -gap > expected_overlap + OVERLAP_TOLERANCE_S:
+                issues.append(
+                    QAIssue(
+                        category="technical", severity=QASeverity.ERROR,
+                        message=f"Impossible timeline overlap of {-gap:.2f}s between clips at {a.timeline_out:.2f}s",
+                        timeline_at=a.timeline_out, auto_repairable=False,
+                    )
                 )
-            )
     return issues
 
 

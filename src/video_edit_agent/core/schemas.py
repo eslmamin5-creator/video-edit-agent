@@ -92,6 +92,21 @@ class EDLClip(BaseModel):
     reason: CutReason = CutReason.MANUAL
     transition_in: TransitionType = TransitionType.HARD_CUT
     transition_out: TransitionType = TransitionType.HARD_CUT
+    # Real crossfade overlap in seconds for `transition_in`, consumed by the
+    # shared render core (spec Phase 2 Finalization section 2-3). Zero means
+    # "no real video transition" even if `transition_in` says CROSSFADE --
+    # only a caller that deliberately sets this (currently only the
+    # Assembler's Transition Director) gets an actually-rendered crossfade,
+    # so Editor's/Creator's existing output never changes as a side effect.
+    transition_duration_s: float = 0.0
+    # Whether this clip's source genuinely contains an audio stream (as
+    # opposed to a synthesized silent track muxed in so the shared filter
+    # graph always has an audio branch). Used to decide whether a real audio
+    # crossfade is legitimate at a boundary (spec section 6).
+    has_real_audio: bool = True
+    # LUFS-ish target for a real `loudnorm` pass on this clip's own audio
+    # (spec section 7). None means no normalization filter is applied.
+    loudnorm_target_db: Optional[float] = None
     audio_fade_in_ms: int = 0
     audio_fade_out_ms: int = 0
     speed: float = 1.0

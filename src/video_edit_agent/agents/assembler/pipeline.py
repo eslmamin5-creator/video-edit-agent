@@ -27,6 +27,7 @@ from video_edit_agent.agents.assembler.analysis import analyze_scenes
 from video_edit_agent.agents.assembler.continuity import analyze_continuity
 from video_edit_agent.agents.assembler.discovery import build_scene_inventory, discover_scene_files
 from video_edit_agent.agents.assembler.edl_builder import build_scene_edl
+from video_edit_agent.agents.assembler.loudness import LoudnessDecision, plan_loudness
 from video_edit_agent.agents.assembler.normalization import plan_normalization
 from video_edit_agent.agents.assembler.ordering import resolve_order
 from video_edit_agent.agents.assembler.qa import run_assembler_qa
@@ -69,6 +70,7 @@ class AssemblerResult:
     continuity_report: list[ContinuityFinding] = field(default_factory=list)
     transition_plan: list[TransitionDecision] = field(default_factory=list)
     sound_plan: list[SoundOperation] = field(default_factory=list)
+    loudness_plan: list[LoudnessDecision] = field(default_factory=list)
     master_timeline: MasterTimeline | None = None
     rough_cut_path: Path | None = None
     final_output: Path | None = None
@@ -196,6 +198,17 @@ def run_assembler(
     )
     memory.sound_plan_status = f"{len(sound_plan)} operation(s) planned"
 
+    # 8b. Loudness plan (Phase 2 Finalization spec sections 7-8) -- real
+    # measurement, not a hardcoded assumption; only scenes that measurably
+    # drift from the conservative target get a real `loudnorm` pass.
+    loudness_plan = plan_loudness(ordered_items)
+    paths.loudness_plan_json.write_text(
+        json.dumps([d.model_dump(mode="json") for d in loudness_plan], ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    required_count = sum(1 for d in loudness_plan if d.required)
+    memory.loudness_status = f"{required_count} of {len(loudness_plan)} scene(s) needed normalization"
+    loudness_targets = {d.scene_id: d.target_db for d in loudness_plan if d.applied}
+
     # 9. EDL + MasterTimeline (spec section 8) -- exact shared schema.
     edl = build_scene_edl(
         ordered_items,
@@ -204,6 +217,7 @@ def run_assembler(
         fps=preset.fps,
         cache_dir=paths.cache_dir / "assembler_audio",
         transitions=transitions,
+        loudness_targets=loudness_targets,
     )
     master_timeline = build_assembler_timeline(edl)
     save_master_timeline(master_timeline, paths.master_timeline_json)
@@ -257,6 +271,7 @@ def run_assembler(
         continuity_report=continuity,
         transition_plan=transitions,
         sound_plan=sound_plan,
+        loudness_plan=loudness_plan,
         master_timeline=master_timeline,
         rough_cut_path=rough_cut_path,
         final_output=final_output,

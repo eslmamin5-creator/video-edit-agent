@@ -139,6 +139,10 @@ class ProjectPaths:
     def rough_cut_mp4(self) -> Path:
         return self.edit_dir / "rough_cut.mp4"
 
+    @property
+    def loudness_plan_json(self) -> Path:
+        return self.edit_dir / "loudness_plan.json"
+
 
 @dataclass
 class ProjectMemory:
@@ -167,6 +171,7 @@ class ProjectMemory:
     transition_plan_status: str = ""
     sound_plan_status: str = ""
     finish_status: str = ""
+    loudness_status: str = ""
 
     def log_decision(self, text: str) -> None:
         self.decisions.append(f"[{_now()}] {text}")
@@ -209,6 +214,8 @@ class ProjectMemory:
             f"## Transition Plan Status\n{self.transition_plan_status or '_(none)_'}",
             "",
             f"## Sound Plan Status\n{self.sound_plan_status or '_(none)_'}",
+            "",
+            f"## Loudness Status\n{self.loudness_status or '_(none)_'}",
             "",
             f"## Finish Status\n{self.finish_status or '_(none)_'}",
             "",
@@ -273,6 +280,7 @@ class ProjectMemory:
             "transition_plan_status": self.transition_plan_status,
             "sound_plan_status": self.sound_plan_status,
             "finish_status": self.finish_status,
+            "loudness_status": self.loudness_status,
         }
         sidecar.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
