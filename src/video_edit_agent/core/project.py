@@ -56,6 +56,10 @@ class ProjectPaths:
         return self.edit_dir / "edl.json"
 
     @property
+    def master_timeline_json(self) -> Path:
+        return self.edit_dir / "master_timeline.json"
+
+    @property
     def project_md(self) -> Path:
         return self.edit_dir / "project.md"
 

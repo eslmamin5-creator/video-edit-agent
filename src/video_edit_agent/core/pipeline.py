@@ -40,6 +40,7 @@ from video_edit_agent.qa.visual import run_visual_qa
 from video_edit_agent.render.composition import CaptionBurn, Overlay, RenderPlan
 from video_edit_agent.render.export import resolve_preset
 from video_edit_agent.render.ffmpeg import render as render_ffmpeg
+from video_edit_agent.subject.compositor import find_enclosing_clip, render_subject_cutout, to_source_window
 from video_edit_agent.transcription.router import TranscriptionRouter, save_transcript
 
 
@@ -126,6 +127,10 @@ def run_pipeline(
     from video_edit_agent.editorial.edl import save as save_edl
 
     save_edl(edl, paths.edl_json)
+    from video_edit_agent.core.timeline import edl_to_master_timeline
+    from video_edit_agent.core.timeline import save as save_master_timeline
+
+    save_master_timeline(edl_to_master_timeline(edl, workflow="editor"), paths.master_timeline_json)
 
     # 5. Captions (Arabic-capable, RTL, word-highlight per spec section 15)
     progress("captions")
@@ -165,9 +170,48 @@ def run_pipeline(
         for i, spec in enumerate(specs):
             item = render_motion(spec, paths.root, motion_output_dir, brand=brand, fps=edl.fps, slot_id=f"motion{i}")
             motion_items.append(item)
-            if item.output_path:
+            if not item.output_path:
+                continue
+
+            graphic_overlay = Overlay(path=Path(item.output_path), start=spec.timeline_start, end=spec.timeline_end)
+
+            if not spec.behind_subject:
+                overlays.append(graphic_overlay)
+                continue
+
+            # Behind-subject compositing (spec Phase 2 section 25): draw the
+            # graphic first (it will cover the subject baked into the base
+            # frame), then draw a subject-only cutout on top to restore the
+            # subject in front of it. Falls back to a plain foreground
+            # overlay -- never drops the overlay -- if the window doesn't map
+            # onto a single source clip or segmentation can't produce a
+            # usable mask (spec section 26).
+            graphic_overlay.behind_subject = True
+            overlays.append(graphic_overlay)
+
+            enclosing = find_enclosing_clip(edl, spec.timeline_start, spec.timeline_end)
+            cutout_path = None
+            if enclosing is not None:
+                src_start, src_end = to_source_window(enclosing, spec.timeline_start, spec.timeline_end)
+                cutout_path = render_subject_cutout(
+                    Path(enclosing.source_file), src_start, src_end, paths.cache_dir / "subject_cutouts",
+                )
+
+            if cutout_path is not None:
                 overlays.append(
-                    Overlay(path=Path(item.output_path), start=spec.timeline_start, end=spec.timeline_end)
+                    Overlay(path=cutout_path, start=spec.timeline_start, end=spec.timeline_end)
+                )
+                memory.log_decision(
+                    f"Behind-subject compositing applied for motion slot {i} ({spec.kind.value})"
+                )
+            else:
+                reason = "motion window spans a cut" if enclosing is None else "no usable subject mask"
+                warnings.append(
+                    f"Behind-subject requested for motion slot {i} but unavailable ({reason}); "
+                    "used plain foreground overlay instead"
+                )
+                memory.log_decision(
+                    f"Behind-subject fallback for motion slot {i}: {reason} -> plain overlay"
                 )
 
         import json
