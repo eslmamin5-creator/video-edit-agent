@@ -107,6 +107,38 @@ class ProjectPaths:
     def asset_plan_json(self) -> Path:
         return self.edit_dir / "asset_plan.json"
 
+    @property
+    def scene_inventory_json(self) -> Path:
+        return self.edit_dir / "scene_inventory.json"
+
+    @property
+    def scene_analysis_json(self) -> Path:
+        return self.edit_dir / "scene_analysis.json"
+
+    @property
+    def script_alignment_json(self) -> Path:
+        return self.edit_dir / "script_alignment.json"
+
+    @property
+    def normalization_plan_json(self) -> Path:
+        return self.edit_dir / "normalization_plan.json"
+
+    @property
+    def continuity_report_json(self) -> Path:
+        return self.edit_dir / "continuity_report.json"
+
+    @property
+    def transition_plan_json(self) -> Path:
+        return self.edit_dir / "transition_plan.json"
+
+    @property
+    def sound_plan_json(self) -> Path:
+        return self.edit_dir / "sound_plan.json"
+
+    @property
+    def rough_cut_mp4(self) -> Path:
+        return self.edit_dir / "rough_cut.mp4"
+
 
 @dataclass
 class ProjectMemory:
@@ -128,6 +160,13 @@ class ProjectMemory:
     storyboard_status: str = ""
     asset_plan_status: str = ""
     master_timeline_path: str = ""
+    order_policy: str = ""
+    normalization_status: str = ""
+    rough_cut_path: str = ""
+    continuity_status: str = ""
+    transition_plan_status: str = ""
+    sound_plan_status: str = ""
+    finish_status: str = ""
 
     def log_decision(self, text: str) -> None:
         self.decisions.append(f"[{_now()}] {text}")
@@ -158,6 +197,20 @@ class ProjectMemory:
             f"## Asset Plan Status\n{self.asset_plan_status or '_(none)_'}",
             "",
             f"## MasterTimeline\n{self.master_timeline_path or '_(none)_'}",
+            "",
+            f"## Order Policy\n{self.order_policy or '_(none)_'}",
+            "",
+            f"## Normalization Status\n{self.normalization_status or '_(none)_'}",
+            "",
+            f"## Rough Cut\n{self.rough_cut_path or '_(none)_'}",
+            "",
+            f"## Continuity Status\n{self.continuity_status or '_(none)_'}",
+            "",
+            f"## Transition Plan Status\n{self.transition_plan_status or '_(none)_'}",
+            "",
+            f"## Sound Plan Status\n{self.sound_plan_status or '_(none)_'}",
+            "",
+            f"## Finish Status\n{self.finish_status or '_(none)_'}",
             "",
             "## Preferences",
             _bullets([f"{k}: {v}" for k, v in self.preferences.items()]) or "_(none)_",
@@ -213,6 +266,13 @@ class ProjectMemory:
             "storyboard_status": self.storyboard_status,
             "asset_plan_status": self.asset_plan_status,
             "master_timeline_path": self.master_timeline_path,
+            "order_policy": self.order_policy,
+            "normalization_status": self.normalization_status,
+            "rough_cut_path": self.rough_cut_path,
+            "continuity_status": self.continuity_status,
+            "transition_plan_status": self.transition_plan_status,
+            "sound_plan_status": self.sound_plan_status,
+            "finish_status": self.finish_status,
         }
         sidecar.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 

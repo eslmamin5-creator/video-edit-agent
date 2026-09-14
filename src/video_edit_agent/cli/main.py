@@ -18,6 +18,7 @@ import typer
 from rich.console import Console
 
 from video_edit_agent import __version__
+from video_edit_agent.agents.assembler.pipeline import AssemblerError, run_assembler
 from video_edit_agent.agents.creator.parser import ScriptParseError
 from video_edit_agent.agents.creator.pipeline import run_creator
 from video_edit_agent.brand.loader import BrandNotFoundError, init_brand, load_brand
@@ -154,6 +155,58 @@ def create(
     console.print(f"Scenes: {len(result.scenes)}")
     if result.qa_report and result.qa_report.issues:
         console.print(f"QA issues: {len(result.qa_report.issues)} (see project.md for detail)")
+
+
+@app.command()
+def assemble(
+    scenes: Path = typer.Argument(..., exists=True, file_okay=False, help="Directory of existing scene video files."),
+    rough: bool = typer.Option(False, "--rough", help="Produce a fast Rough Cut (edit/rough_cut.mp4)."),
+    finish: bool = typer.Option(False, "--finish", help="Produce the finished film, reusing prior plan decisions."),
+    preserve_order: bool = typer.Option(
+        False, "--preserve-order", help="Guarantee the discovered scene order is never reordered."
+    ),
+    order: str = typer.Option(
+        "preserve", "--order", help="Ordering policy: filename|script (ignored if --preserve-order is set)."
+    ),
+    script: Optional[Path] = typer.Option(None, "--script", help="Script file for --order script alignment."),
+    brand: Optional[str] = typer.Option(None, "--brand", help="Brand profile name under brands/."),
+    preset: str = typer.Option("reel", "--preset", help="Export preset: reel|tiktok|shorts|square|landscape."),
+    offline: bool = typer.Option(False, "--offline", help="Block all cloud calls; local-only Assembler pipeline."),
+):
+    """Assemble multiple existing video scenes into a rough cut / finished film."""
+    lang = _lang()
+    if offline:
+        console.print(t("offline_mode", lang))
+
+    try:
+        result = run_assembler(
+            scenes,
+            rough=rough,
+            finish=finish,
+            preserve_order=preserve_order,
+            order=order,
+            script_path=script,
+            brand_name=brand,
+            offline=offline,
+            preset_name=preset,
+        )
+    except (AssemblerError, ScriptParseError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+    if result.rough_cut_path is None and result.final_output is None:
+        console.print(t("error_generic", lang, message="; ".join(result.warnings) or "Assembler did not complete"))
+        raise typer.Exit(code=1)
+
+    console.print(t("render_success", lang))
+    if result.rough_cut_path:
+        console.print(f"Rough Cut: {result.rough_cut_path}")
+    if result.final_output:
+        console.print(f"Final: {result.final_output}")
+    console.print(f"Project files: {result.project_dir}")
+    console.print(f"Scenes: {len(result.scene_inventory)} (order policy: {result.order_policy.value})")
+    if result.qa_issues:
+        console.print(f"QA issues: {len(result.qa_issues)} (see project.md for detail)")
 
 
 @app.command()
