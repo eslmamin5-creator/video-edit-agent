@@ -33,24 +33,82 @@
 
 ## التثبيت
 
+### الخيار أ — تثبيت كـ Claude Code Skill (موصى به لمعظم المستخدمين)
+
+1. استنسخ (clone) أو ثبّت هذا المستودع داخل مجلد مهارات (skills) الخاص بـ Claude Code.
+2. افتح Claude Code (أو أعد تشغيله).
+3. قل: **"Set up video-edit-agent and verify it."**
+
+يقوم Claude بإعداد كل شيء نيابة عنك: يكتشف نظام التشغيل وإصدار بايثون
+متوافق (يفضّل 3.11)، ويبني بيئة تشغيل خاصة يملكها المشروع نفسه
+(`.runtime/venv` — أبدًا بايثون النظام العام)، ويثبّت الحزمة الجاهزة للعمل
+دون اتصال، ويتحقق من `ffmpeg`/`ffprobe` وNode/npm، ثم يعرض تقرير جاهزية
+واضحًا. لا يُثبِّت أبدًا برمجيات على مستوى النظام دون إذن — إذا كان `ffmpeg`
+مفقودًا يعطيك الأمر الدقيق المناسب لنظامك (`winget`/`choco`/`scoop` على
+Windows، وHomebrew على macOS، ومدير حزم توزيعتك على Linux) وينتظر منك
+تشغيله بنفسك. لا يُطلب أو يُخزَّن أي مفتاح API أبدًا.
+
+بمجرد أن يُعلن الجاهزية، تحدث معه بشكل طبيعي:
+
+- "عدل الفيديو ده" → Editor
+- "اعمل فيديو من السكربت ده" → Creator
+- "اجمع المشاهد دي في فيلم" → Assembler
+
+لست بحاجة لفهم بيئات بايثون الافتراضية أو حزم pip الإضافية أو توجيه المزوّدين
+لاستخدام هذا المسار.
+
+### الخيار ب — تثبيت تقني عبر سطر الأوامر (من المصدر، للمستخدمين المتقدمين)
+
 ```bash
-pip install video-edit-agent
+git clone https://github.com/eslmamin5-creator/video-edit-agent
+cd video-edit-agent
+python3 -m pip install -e .          # الحزمة الأساسية فقط
+videoedit setup --profile full-local # يبني .runtime/venv ويثبّت الحزمة دون اتصال
 ```
 
-أو لدعم التفريغ المحلي (بدون اتصال):
+على Windows (PowerShell)، بدون الحاجة لـ WSL:
 
-```bash
-pip install "video-edit-agent[local]"
+```powershell
+git clone https://github.com/eslmamin5-creator/video-edit-agent
+cd video-edit-agent
+py -3.11 -m pip install -e .
+videoedit setup --profile full-local
 ```
 
-يجب توفر `ffmpeg`/`ffprobe` ضمن `PATH`. بعد التثبيت شغّل `videoedit doctor`
-لمعرفة ما هو متاح بالضبط على جهازك.
+يدعم `videoedit setup`:
+
+| الأمر | ما يفعله |
+|---|---|
+| `videoedit setup` | إعداد كامل بالحزمة الموصى بها `full-local` (دون اتصال). |
+| `videoedit setup --profile local\|subject\|motion\|core` | إعداد بحزمة تثبيت أضيق. |
+| `videoedit setup --check` | للقراءة فقط: يعرض الجاهزية دون أي تغيير. |
+| `videoedit setup --repair` | يعيد بناء بيئة تشغيل معطوبة أو مفقودة؛ لا يمس أي شيء خارج `.runtime/`. |
+
+إعادة تشغيل `videoedit setup` آمنة دائمًا — فهي متكررة النتيجة (idempotent)
+وتعيد استخدام بيئة سليمة بدلًا من إعادة التثبيت.
+
+التثبيت من PyPI (`pip install video-edit-agent`) لا يزال يعمل للحزمة
+الأساسية ولأي إضافة فردية (`pip install "video-edit-agent[local]"`)، لكن
+التثبيت من GitHub/المصدر متبوعًا بـ `videoedit setup` هو المسار الرسمي
+المدعوم بالكامل — وPyPI ليس الطريقة الوحيدة.
+
+**أنظمة التشغيل المدعومة:** Windows (PowerShell، بدون WSL)، macOS، Linux.
+**بايثون:** يتطلب 3.10 فأعلى؛ يُفضَّل 3.11 ويُختار تلقائيًا عند توفره.
+**ffmpeg/ffprobe:** مطلوبان لأي تصدير؛ يكتشفهما `videoedit setup`/`doctor`
+ويقدّمان إرشادات تثبيت دقيقة عند غيابهما — لا يُثبَّتان تلقائيًا أبدًا.
+**Node/npm:** اختياريان — مطلوبان فقط لمحرك الرسوم المتحركة Remotion؛ محرك
+الحركة المدمج البسيط يعمل بالكامل دون اتصال بدونهما.
+**مفاتيح API:** اختيارية دائمًا. عدم وجود أي مفتاح هو إعداد مدعوم بالكامل
+ويعمل فعليًا.
+
+شغّل `videoedit doctor` في أي وقت لعرض جدول القدرات الكامل وملخص آخر تشغيل
+لـ `videoedit setup`.
 
 ## بداية سريعة
 
 ```bash
-videoedit setup          # فحص أولي للبيئة + تثبيت اختياري لـ Whisper المحلي
-videoedit doctor         # عرض جدول القدرات الكامل
+videoedit setup           # إعداد لمرة واحدة: بيئة تشغيل خاصة + حزمة دون اتصال + فحص القدرات
+videoedit doctor          # عرض جدول القدرات الكامل
 videoedit edit my_take.mp4
 ```
 
@@ -68,12 +126,12 @@ videoedit edit my_take.mp4
 | `videoedit assemble <scenes_dir> --finish` | إتمام الفيلم: انتقالات حقيقية + تطبيع الصوت بين المشاهد، مع إعادة استخدام خطة القصة الأولية |
 | `videoedit doctor` | عرض جدول القدرات (ffmpeg، Node، المزوّدون، المحركات) |
 | `videoedit providers` | عرض مزوّدي التفريغ والرسوم المتحركة وتوفرهم |
-| `videoedit setup` | معالج إعداد تفاعلي للمرة الأولى |
+| `videoedit setup [--profile ...] [--check] [--repair]` | إعداد بيئة التشغيل الخاصة والتحقق من جاهزية البيئة |
 | `videoedit config show / set` | عرض أو تعديل الإعدادات المتراكبة (بدون أي أسرار) |
 | `videoedit brand init / validate` | إنشاء أو التحقق من ملف هوية علامة تجارية |
 | `videoedit project inspect <dir>` | عرض ذاكرة `project.md` لمشروع ما |
 
-## حالة القدرات (اعتبارًا من الإصدار v0.2.0)
+## حالة القدرات (اعتبارًا من الإصدار v0.2.1)
 
 حالة صادقة لكل قدرة، باستخدام ست فئات:
 `VERIFIED LOCALLY` (اجتاز اختبار قبول محلي حقيقي وغير وهمي)،
@@ -93,7 +151,7 @@ videoedit edit my_take.mp4
 | رسوم Remotion المتحركة | FALLBACK AVAILABLE | تم اكتشاف Node/npm والتصدير ممكن عبر `npx`، لكن لم يُشغَّل ويُسجَّل أي تصدير قبول حقيقي في هذه البيئة (يعرض `videoedit doctor` "Verified: not yet"). |
 | محرك HyperFrames | NOT VERIFIED | لا توجد حزمة HyperFrames حقيقية للتثبيت: الحزمة الوحيدة على PyPI بهذا الاسم هي مكتبة إطارات بيانات متعددة الأبعاد غير ذات صلة وبلا أي واجهة تصدير. موجّه الحركة (router) يتراجع بشكل صحيح إلى محرك يعمل (Simple/PIL) عند طلب HyperFrames وعدم توفره، وهذا التراجع مغطّى باختبار آلي ويُسجَّل دائمًا في `MotionPlanItem.fallback_log` — وليس استبدالًا صامتًا أبدًا. |
 | تراجع محرك الحركة (HyperFrames/Remotion -> Simple) | VERIFIED LOCALLY | اختبار آلي يثبت أن المحرك غير المتاح يتراجع إلى محرك يعمل، وأن المشروع يكتمل، وأن كل محرك مرفوض يُسجَّل في `fallback_log` (`tests/test_motion_router.py`). |
-| كشف قناع "خلف الموضوع" (Behind-Subject) والتخزين المؤقت | VERIFIED LOCALLY | تجزئة mediapipe حقيقية (غير وهمية) تعمل على مقطع فيديو حقيقي، والاستدعاء الثاني المطابق يعيد استخدام القناع المخزَّن بدلًا من إعادة حسابه (`scripts/behind_subject_acceptance.py`، `tests/test_behind_subject.py`). يتطلب `mediapipe<1.0` (مثل `mediapipe==0.10.21`) — الإصدار 1.0+ من mediapipe أزال الواجهة التي يستخدمها هذا المشروع. |
+| كشف قناع "خلف الموضوع" (Behind-Subject) والتخزين المؤقت | VERIFIED LOCALLY | تجزئة mediapipe حقيقية (غير وهمية) تعمل على مقطع فيديو حقيقي، والاستدعاء الثاني المطابق يعيد استخدام القناع المخزَّن بدلًا من إعادة حسابه (`scripts/behind_subject_acceptance.py`، `tests/test_behind_subject.py`). يتطلب بالتحديد `mediapipe==0.10.21` — `mediapipe<1.0` وحده ليس حدًا آمنًا: الإصدار 0.10.35 (وهو أيضًا <1.0) أزال بالفعل واجهة `mediapipe.solutions.selfie_segmentation` القديمة التي يستخدمها هذا المشروع (تم التأكد من ذلك عبر اختبار تثبيت حقيقي على جهاز نظيف)، كما أن الإصدار 1.0+ يزيلها تمامًا. يقوم `videoedit setup --profile subject|full-local` بتثبيت الإصدار المحدد المُتحقَّق من عمله تلقائيًا. |
 | تركيب فيديو "خلف الموضوع" (ظهور عنصر خلف الشخص فعليًا في الفيديو النهائي) | VERIFIED LOCALLY | مُنفَّذ بالكامل: `core/pipeline.py` يُصدِّر قصاصة RGBA حقيقية للشخص (`subject/compositor.py::render_subject_cutout()`، استخراج ffmpeg حقيقي + ترميز qtrle بقناة ألفا)، ويضعها — حسب ترتيب قائمة الطبقات (overlays) — فوق طبقة الرسم التي يجب أن تظهر أمامها؛ `render/composition.py::build_filter_complex` يُركِّب `plan.overlays` بالتتابع عبر مرشِّح `overlay` العادي في ffmpeg (الذي يحترم قناة ألفا)، فلا حاجة لأي معالجة خاصة هناك. يتراجع بشكل قابل للتتبع (مُسجَّل، وليس صامتًا أبدًا) إلى طبقة أمامية عادية عند غياب قناع صالح. 8/8 اختبارات في `tests/test_behind_subject.py` تنجح بدون أي محاكاة (mocks) وبدون أي تخطٍّ (skips): تجزئة mediapipe حقيقية، إعادة استخدام حقيقية للقناع المخزَّن، مخرجات RGBA مُتحقَّق منها عبر ffprobe، وتصدير ffmpeg حقيقي من البداية للنهاية. |
 | ملفات الهوية التجارية (Brand Profiles) | VERIFIED LOCALLY | تأكد وصول الخطوط/الألوان/أنماط الترجمات المرتبطة بالهوية التجارية إلى خط التصدير الفعلي. |
 | الوضع دون اتصال (بدون مفاتيح API) | VERIFIED LOCALLY | كل من `videoedit edit --offline` و`videoedit create --offline` و`videoedit assemble --offline` ينتج `final.mp4` صالحًا من البداية للنهاية بدون أي اتصال شبكي. |

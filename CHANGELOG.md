@@ -3,6 +3,62 @@
 All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.2.1] - 2026-09-15
+
+Installation and first-run UX only -- Editor/Creator/Assembler, Brand
+Profiles, MasterTimeline, and behind-subject compositing are unchanged.
+Goal: installation should feel like "install the Skill -> ask Claude to set
+it up -> start making videos," not "become a Python developer first."
+
+### Added
+- New `src/video_edit_agent/bootstrap/` package: OS detection, ordered
+  Python interpreter selection (prefers 3.11, falls back through
+  3.12/3.10, then anything meeting `requires-python`, always with an
+  explanation), a private per-project runtime at `.runtime/venv` (never
+  the global/system Python), named install profiles (`core`, `local`,
+  `subject`, `motion`, `full-local`), ffmpeg/ffprobe detection with exact
+  OS/package-manager-specific install guidance (winget/choco/scoop,
+  Homebrew, apt/dnf/yum/pacman/zypper/apk) that never installs anything
+  automatically, Node/npm/Remotion detection, and non-secret setup-state
+  persistence (`.runtime/setup_state.json`).
+- `videoedit setup --profile full-local|local|subject|motion|core`,
+  `videoedit setup --check` (read-only, makes no changes), and
+  `videoedit setup --repair` (rebuilds a broken/missing private runtime
+  without touching anything outside `.runtime/`). Re-running setup is
+  idempotent and fast (pip no-ops on an already-satisfied profile).
+- `videoedit doctor` now also reports the last `videoedit setup` run
+  (profile, Python version, verification timestamp) when setup state
+  exists.
+
+### Fixed
+- **mediapipe dependency bound was unsafe.** `mediapipe<1.0` alone is not
+  sufficient: fresh-install testing found that mediapipe 0.10.35 (still
+  `<1.0`) has already dropped the legacy `mediapipe.solutions.
+  selfie_segmentation` API this project's behind-subject adapter needs.
+  Pinned to the exact verified-working version, `mediapipe==0.10.21`,
+  across the `subject`, `full-local`, and `all` extras.
+- **`full-local` could fail to install on a clean machine.** It previously
+  pulled in `manim`, whose wheel build requires system Cairo/Pango
+  libraries (`pangocairo >= 1.30.0`) that are commonly absent on fresh
+  Linux/Windows installs. `manim` is not load-bearing for "local motion"
+  -- the built-in simple motion engine already covers it fully offline --
+  so it was removed from `full-local` (still available via the explicit
+  `motion`/`all` profiles for users who want it and have the system deps).
+- **`videoedit setup`'s final readiness report reflected the wrong
+  interpreter.** After building the private runtime and installing a
+  profile into it, the capability check (faster-whisper, mediapipe, ...)
+  ran in-process -- i.e. in whichever interpreter invoked `videoedit
+  setup`, not the newly-built `.runtime/venv` -- so a fresh install could
+  report just-installed packages as still missing. The check (and the
+  `doctor` table shown at the end of `setup`) now runs inside the private
+  runtime's own interpreter via subprocess, with an in-process fallback
+  and an explicit note if that subprocess check itself fails.
+
+### Changed
+- `mediapipe>=0.10` bumped to the exact pin above in `subject`/`full-local`/
+  `all` extras (see Fixed).
+- Package/CLI version bumped to `0.2.1`.
+
 ## [0.2.0] - 2026-09-14
 
 Phase 2 finalization: Creator and Assembler agents, real rendered video
