@@ -21,7 +21,7 @@ class ProjectPaths:
     verify_dir: Path
 
     @classmethod
-    def for_source(cls, source: Path) -> "ProjectPaths":
+    def for_source(cls, source: Path) -> ProjectPaths:
         base = source if source.is_dir() else source.parent
         edit_dir = base / "edit"
         return cls(
@@ -245,7 +245,7 @@ class ProjectMemory:
         return self.paths.project_md
 
     @classmethod
-    def load_or_new(cls, paths: ProjectPaths) -> "ProjectMemory":
+    def load_or_new(cls, paths: ProjectPaths) -> ProjectMemory:
         # project.md is human-readable memory, not a strict machine format;
         # a JSON sidecar keeps it reliably resumable.
         sidecar = paths.edit_dir / ".project_memory.json"

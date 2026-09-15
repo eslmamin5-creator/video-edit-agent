@@ -18,7 +18,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from video_edit_agent.agents.assembler.schemas import OrderPolicy, ScriptAlignmentItem, SceneInventoryItem
+from video_edit_agent.agents.assembler.schemas import (
+    OrderPolicy,
+    SceneInventoryItem,
+    ScriptAlignmentItem,
+)
 
 MIN_SCRIPT_ORDER_CONFIDENCE = 0.5
 

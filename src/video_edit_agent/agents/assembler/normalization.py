@@ -15,7 +15,11 @@ Finish pass (or a human) can act on them.
 """
 from __future__ import annotations
 
-from video_edit_agent.agents.assembler.schemas import AspectStrategy, NormalizationChoice, SceneAnalysis
+from video_edit_agent.agents.assembler.schemas import (
+    AspectStrategy,
+    NormalizationChoice,
+    SceneAnalysis,
+)
 
 # A scene's brightness/contrast recommendation nudges it toward these
 # targets only when it's a clear outlier vs. the rest of the sequence --

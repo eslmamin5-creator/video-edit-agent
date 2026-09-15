@@ -11,7 +11,6 @@ uses the shared `QAIssue`/`QASeverity`/`QAReport` types.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -65,7 +64,7 @@ class Scene(BaseModel):
     voice_over_text: str = ""
     transition_intent: str = "hard_cut"
     brand_constraints: list[str] = Field(default_factory=list)
-    provenance_placeholder: Optional[str] = None
+    provenance_placeholder: str | None = None
 
 
 class StoryboardFrame(BaseModel):
@@ -100,6 +99,6 @@ class AssetTreatment(str, Enum):
 class AssetPlanItem(BaseModel):
     scene_id: str
     treatment: AssetTreatment = AssetTreatment.TYPOGRAPHY
-    asset_path: Optional[str] = None
+    asset_path: str | None = None
     provenance: str = "planned"  # updated to actual engine/source once resolved at render time
     offline_safe: bool = True

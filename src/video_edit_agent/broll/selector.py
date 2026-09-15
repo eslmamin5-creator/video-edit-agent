@@ -5,8 +5,6 @@ over-inserting B-roll is a worse failure mode than under-inserting it.
 """
 from __future__ import annotations
 
-import re
-
 from video_edit_agent.core.schemas import EDL, BrollPlanItem, Transcript
 
 _MIN_CLIP_DURATION_FOR_BROLL = 2.5

@@ -49,7 +49,7 @@ def test_build_scene_inventory_probes_each_scene(assembler_scenes_dir: Path):
     assert [i.id for i in inventory] == [f"scene_{n:03d}" for n in range(5)]
     assert [i.original_order for i in inventory] == [0, 1, 2, 3, 4]
 
-    intro, middle, action, closeup, outro = inventory
+    intro, middle, action, closeup, _outro = inventory
     assert intro.width == 640 and intro.height == 360
     assert intro.aspect_ratio == "16:9"
     assert closeup.width == 480 and closeup.height == 480

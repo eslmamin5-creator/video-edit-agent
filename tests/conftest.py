@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from video_edit_agent.core.schemas import EDL, EDLClip, Segment, Transcript, Word  # noqa: E402
+from video_edit_agent.core.schemas import EDL, EDLClip, Segment, Transcript, Word
 
 HAS_FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 

@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 from video_edit_agent.agents.assembler.continuity import analyze_continuity
-from video_edit_agent.agents.assembler.schemas import ContinuitySeverity, SceneAnalysis, TransitionKind
+from video_edit_agent.agents.assembler.schemas import (
+    ContinuitySeverity,
+    SceneAnalysis,
+    TransitionKind,
+)
 from video_edit_agent.agents.assembler.sound import plan_sound
 from video_edit_agent.agents.assembler.transitions import plan_transitions
 
 
 def _analysis(scene_id: str, **overrides) -> SceneAnalysis:
-    base = dict(
-        scene_id=scene_id, duration=1.0, dominant_color="#808080", brightness=0.5,
-        contrast=0.4, motion_direction="static", has_audio=True, is_silent=False,
-        aspect_ratio="16:9", width=640, height=360, fps=30.0,
-    )
+    base = {
+        "scene_id": scene_id, "duration": 1.0, "dominant_color": "#808080", "brightness": 0.5,
+        "contrast": 0.4, "motion_direction": "static", "has_audio": True, "is_silent": False,
+        "aspect_ratio": "16:9", "width": 640, "height": 360, "fps": 30.0,
+    }
     base.update(overrides)
     return SceneAnalysis(**base)
 

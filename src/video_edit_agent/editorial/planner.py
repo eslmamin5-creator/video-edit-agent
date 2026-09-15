@@ -8,7 +8,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from video_edit_agent.core.schemas import CutReason, EDL, EDLClip, Segment, Transcript, TransitionType
+from video_edit_agent.core.schemas import (
+    EDL,
+    CutReason,
+    EDLClip,
+    Segment,
+    Transcript,
+    TransitionType,
+)
 from video_edit_agent.editorial.silence import SilenceSpan, detect_silence
 from video_edit_agent.editorial.takes import TakeVerdict, analyze_takes
 
@@ -47,7 +54,6 @@ def build_edl(
 
     clips: list[EDLClip] = []
     timeline_cursor = 0.0
-    fade_s = crossfade_ms / 1000.0
 
     kept_segments = [s for s in transcript.segments if s.id in keep_ids and s.text.strip()]
     for i, seg in enumerate(kept_segments):

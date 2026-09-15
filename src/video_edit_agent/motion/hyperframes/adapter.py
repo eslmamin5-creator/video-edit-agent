@@ -55,7 +55,7 @@ def render(spec: AnimationSpec, output_dir: Path) -> Path:
         # behind this single call site so a future SDK version only needs a
         # change here, not throughout the motion pipeline.
         result_path = hyperframes.render_from_spec(spec.model_dump(mode="json"), str(output_dir))  # type: ignore[attr-defined]
-    except Exception as e:  # noqa: BLE001 - report cleanly, never crash the render
+    except Exception as e:
         raise HyperFramesRenderError(f"HyperFrames render failed: {e}") from e
 
     return Path(result_path)

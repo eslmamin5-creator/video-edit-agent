@@ -3,7 +3,6 @@ bootstrap state, and `videoedit setup --check` never mutating the filesystem.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from typer.testing import CliRunner

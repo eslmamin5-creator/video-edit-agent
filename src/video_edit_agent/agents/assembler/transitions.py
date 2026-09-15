@@ -14,7 +14,14 @@ unimplemented for this milestone.
 """
 from __future__ import annotations
 
-from video_edit_agent.agents.assembler.schemas import ContinuityFinding, ContinuitySeverity, TransitionDecision, TransitionKind
+from itertools import pairwise
+
+from video_edit_agent.agents.assembler.schemas import (
+    ContinuityFinding,
+    ContinuitySeverity,
+    TransitionDecision,
+    TransitionKind,
+)
 
 SHORT_CROSSFADE_DURATION = 0.35
 AUDIO_BRIDGE_DURATION = 0.15
@@ -29,7 +36,7 @@ def plan_transitions(
         findings_by_pair.setdefault((f.from_scene, f.to_scene), []).append(f)
 
     decisions: list[TransitionDecision] = []
-    for a, b in zip(scene_ids, scene_ids[1:]):
+    for a, b in pairwise(scene_ids):
         pair_findings = findings_by_pair.get((a, b), [])
         decisions.append(_decide(a, b, pair_findings))
     return decisions

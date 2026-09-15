@@ -20,7 +20,13 @@ from video_edit_agent.agents.creator.parser import parse_script
 from video_edit_agent.agents.creator.qa import run_creator_qa
 from video_edit_agent.agents.creator.render import render_creator_timeline
 from video_edit_agent.agents.creator.scenes import build_scenes
-from video_edit_agent.agents.creator.schemas import AssetPlanItem, CreatorStyle, Scene, ScriptAnalysis, Storyboard
+from video_edit_agent.agents.creator.schemas import (
+    AssetPlanItem,
+    CreatorStyle,
+    Scene,
+    ScriptAnalysis,
+    Storyboard,
+)
 from video_edit_agent.agents.creator.storyboard import build_storyboard, render_storyboard_markdown
 from video_edit_agent.agents.creator.timeline import build_creator_timeline
 from video_edit_agent.brand.loader import load_brand
@@ -28,7 +34,8 @@ from video_edit_agent.brand.schema import Brand
 from video_edit_agent.broll.library import default_library_dir
 from video_edit_agent.core.project import ProjectMemory, ProjectPaths
 from video_edit_agent.core.schemas import MotionPlanItem, QAReport
-from video_edit_agent.core.timeline import MasterTimeline, save as save_master_timeline
+from video_edit_agent.core.timeline import MasterTimeline
+from video_edit_agent.core.timeline import save as save_master_timeline
 from video_edit_agent.render.export import resolve_preset
 
 
@@ -103,7 +110,7 @@ def run_creator(
     # and this Creator slice never reaches that step at all.
     broll_library_dir = default_library_dir()
 
-    timeline, motion_items, broll_items = build_creator_timeline(
+    timeline, motion_items, _broll_items = build_creator_timeline(
         scenes,
         asset_plan,
         project_root=paths.root,

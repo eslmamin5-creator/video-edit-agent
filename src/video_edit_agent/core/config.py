@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
@@ -59,12 +59,12 @@ class AppConfig(BaseModel):
     interface: InterfaceConfig = Field(default_factory=InterfaceConfig)
     editorial: EditorialConfig = Field(default_factory=EditorialConfig)
     offline: bool = False
-    brand: Optional[str] = None
+    brand: str | None = None
 
     # ---- persistence -------------------------------------------------
 
     @classmethod
-    def load(cls, project_dir: Optional[Path] = None) -> "AppConfig":
+    def load(cls, project_dir: Path | None = None) -> AppConfig:
         data: dict[str, Any] = {}
         if USER_CONFIG_PATH.exists():
             data = _deep_merge(data, yaml.safe_load(USER_CONFIG_PATH.read_text(encoding="utf-8")) or {})
@@ -108,9 +108,9 @@ def _deep_merge(base: dict, override: dict) -> dict:
 # --------------------------------------------------------------------------
 
 
-def get_gemini_key() -> Optional[str]:
+def get_gemini_key() -> str | None:
     return os.environ.get("GEMINI_API_KEY") or None
 
 
-def get_elevenlabs_key() -> Optional[str]:
+def get_elevenlabs_key() -> str | None:
     return os.environ.get("ELEVENLABS_API_KEY") or None

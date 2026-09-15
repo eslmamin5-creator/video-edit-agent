@@ -4,8 +4,8 @@ number of iterations so a stubborn issue can never spin the pipeline forever.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from video_edit_agent.core.schemas import QAIssue, QAReport, QASeverity
 

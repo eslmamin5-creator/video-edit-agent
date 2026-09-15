@@ -40,7 +40,11 @@ from video_edit_agent.qa.visual import run_visual_qa
 from video_edit_agent.render.composition import CaptionBurn, Overlay, RenderPlan
 from video_edit_agent.render.export import resolve_preset
 from video_edit_agent.render.ffmpeg import render as render_ffmpeg
-from video_edit_agent.subject.compositor import find_enclosing_clip, render_subject_cutout, to_source_window
+from video_edit_agent.subject.compositor import (
+    find_enclosing_clip,
+    render_subject_cutout,
+    to_source_window,
+)
 from video_edit_agent.transcription.router import TranscriptionRouter, save_transcript
 
 

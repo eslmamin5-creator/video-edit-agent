@@ -16,8 +16,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from video_edit_agent.agents.assembler.schemas import SceneInventoryItem, TransitionDecision, TransitionKind
-from video_edit_agent.core.media import MediaError, run
+from video_edit_agent.agents.assembler.schemas import (
+    SceneInventoryItem,
+    TransitionDecision,
+    TransitionKind,
+)
+from video_edit_agent.core.media import run
 from video_edit_agent.core.schemas import EDL, CutReason, EDLClip, TransitionType
 from video_edit_agent.core.transition_math import clamp_transition_duration
 

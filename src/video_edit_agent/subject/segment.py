@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from video_edit_agent.core.media import run
-from video_edit_agent.subject.detect import SubjectDetectionUnavailable, detect_mask
+from video_edit_agent.subject.detect import detect_mask
 
 DEFAULT_SAMPLE_FPS = 6.0
 
@@ -68,10 +68,7 @@ def segment_clip(
     frame_times: list[float] = []
     masks: list[np.ndarray] = []
     for timestamp, frame_rgb in frames:
-        try:
-            result = detect_mask(frame_rgb)
-        except SubjectDetectionUnavailable:
-            raise
+        result = detect_mask(frame_rgb)
         frame_times.append(timestamp)
         masks.append(result.mask)
 

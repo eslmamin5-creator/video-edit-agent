@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import venv
 from dataclasses import dataclass
 from pathlib import Path
 

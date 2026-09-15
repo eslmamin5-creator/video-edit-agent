@@ -75,6 +75,7 @@ def _ensure_deps_installed(template_dest: Path, offline: bool = False) -> None:
         capture_output=True,
         text=True,
         timeout=600,
+        check=False,
     )
     if result.returncode != 0:
         raise RemotionRenderError(f"npm install failed: {result.stderr[-2000:]}")
@@ -149,6 +150,7 @@ def render(
             capture_output=True,
             text=True,
             timeout=900,
+            check=False,
         )
     except subprocess.TimeoutExpired as exc:
         raise RemotionRenderError(f"Remotion render timed out: {exc}") from exc

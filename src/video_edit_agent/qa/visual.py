@@ -9,8 +9,11 @@ from pathlib import Path
 
 from video_edit_agent.captions.safe_zone import SafeZone, margins_px
 from video_edit_agent.core.schemas import QAIssue, QASeverity
-from video_edit_agent.providers.gemini_client import GeminiRequestError, GeminiUnavailable
-from video_edit_agent.providers.gemini_client import analyze_video_segment
+from video_edit_agent.providers.gemini_client import (
+    GeminiRequestError,
+    GeminiUnavailable,
+    analyze_video_segment,
+)
 from video_edit_agent.providers.gemini_client import is_available as gemini_available
 
 _VISUAL_QA_PROMPT = (

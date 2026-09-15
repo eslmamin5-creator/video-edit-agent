@@ -23,7 +23,6 @@ _TRANSITION_TO_SOUND = {
 
 
 def plan_sound(analyses: list[SceneAnalysis], transitions: list[TransitionDecision]) -> list[SoundOperation]:
-    by_id = {a.scene_id: a for a in analyses}
     ops: list[SoundOperation] = []
 
     for t in transitions:

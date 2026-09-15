@@ -4,7 +4,6 @@ gating, and real loudness normalization -- not just planning.
 """
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -17,11 +16,14 @@ from video_edit_agent.agents.assembler.pipeline import run_assembler
 from video_edit_agent.agents.assembler.schemas import TransitionDecision, TransitionKind
 from video_edit_agent.core.media import probe, run
 from video_edit_agent.core.schemas import EDL, EDLClip, TransitionType
-from video_edit_agent.core.transition_math import MAX_TRANSITION_S, MIN_TRANSITION_S, clamp_transition_duration
+from video_edit_agent.core.transition_math import (
+    MAX_TRANSITION_S,
+    MIN_TRANSITION_S,
+    clamp_transition_duration,
+)
 from video_edit_agent.render.composition import RenderPlan, build_filter_complex
 from video_edit_agent.render.export import resolve_preset
 from video_edit_agent.render.ffmpeg import render
-
 
 # ---------------------------------------------------------------------------
 # Section 3: transition duration clamping
@@ -177,7 +179,7 @@ def test_loudness_plan_flags_only_the_scene_that_deviates(tmp_path: Path):
             [
                 "ffmpeg", "-y",
                 "-f", "lavfi", "-i", "color=c=gray:s=320x240:d=1.0:r=30",
-                "-f", "lavfi", "-i", f"sine=frequency=440:duration=1.0",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=1.0",
                 "-af", f"volume={vol}",
                 "-shortest", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-c:a", "aac",
                 str(out),

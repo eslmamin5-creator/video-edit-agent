@@ -50,8 +50,9 @@ from video_edit_agent.agents.creator.parser import parse_script
 from video_edit_agent.brand.loader import load_brand
 from video_edit_agent.brand.schema import Brand
 from video_edit_agent.core.project import ProjectMemory, ProjectPaths
-from video_edit_agent.core.schemas import EDL, QAIssue
-from video_edit_agent.core.timeline import MasterTimeline, save as save_master_timeline
+from video_edit_agent.core.schemas import QAIssue
+from video_edit_agent.core.timeline import MasterTimeline
+from video_edit_agent.core.timeline import save as save_master_timeline
 from video_edit_agent.render.export import resolve_preset
 
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from video_edit_agent.brand.defaults import DEFAULT_BRAND, default_brand_yaml
+from video_edit_agent.brand.defaults import DEFAULT_BRAND
 from video_edit_agent.brand.schema import Brand
 
 DEFAULT_BRANDS_ROOT = Path(__file__).resolve().parents[3] / "brands"

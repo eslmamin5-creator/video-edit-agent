@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from video_edit_agent.agents.assembler.ordering import resolve_order
-from video_edit_agent.agents.assembler.schemas import OrderPolicy, SceneInventoryItem, ScriptAlignmentItem
+from video_edit_agent.agents.assembler.schemas import (
+    OrderPolicy,
+    SceneInventoryItem,
+    ScriptAlignmentItem,
+)
 
 
 def _item(id_: str, order: int) -> SceneInventoryItem:

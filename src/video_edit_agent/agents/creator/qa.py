@@ -7,11 +7,11 @@ apply to a Creator project.
 """
 from __future__ import annotations
 
+from itertools import pairwise
 from pathlib import Path
 
-from video_edit_agent.agents.creator.schemas import AssetPlanItem, Scene
+from video_edit_agent.agents.creator.schemas import Scene
 from video_edit_agent.brand.schema import Brand
-from video_edit_agent.core.media import probe
 from video_edit_agent.core.schemas import MotionPlanItem, QAIssue, QAReport, QASeverity
 from video_edit_agent.core.timeline import MasterTimeline, TrackType
 from video_edit_agent.qa.technical import check_output_exists
@@ -53,7 +53,7 @@ def check_overlapping_items(timeline: MasterTimeline) -> list[QAIssue]:
         by_layer.setdefault(item.layer, []).append(item)
     for layer, items in by_layer.items():
         ordered = sorted(items, key=lambda i: i.start)
-        for a, b in zip(ordered, ordered[1:]):
+        for a, b in pairwise(ordered):
             if a.end > b.start + 1e-6:
                 issues.append(
                     QAIssue(

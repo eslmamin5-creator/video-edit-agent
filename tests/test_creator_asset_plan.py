@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from video_edit_agent.agents.creator.analysis import analyze_script
 from video_edit_agent.agents.creator.asset_plan import build_asset_plan
-from video_edit_agent.agents.creator.schemas import AssetTreatment, CreatorStyle
 from video_edit_agent.agents.creator.scenes import build_scenes
+from video_edit_agent.agents.creator.schemas import AssetTreatment, CreatorStyle
 
 _SCRIPT = (
     "Ever feel overwhelmed by clutter? Too much stuff makes it hard to focus. "

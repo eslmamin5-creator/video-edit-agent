@@ -15,8 +15,8 @@ import pytest
 from video_edit_agent.agents.creator import timeline as creator_timeline
 from video_edit_agent.agents.creator.analysis import analyze_script
 from video_edit_agent.agents.creator.asset_plan import build_asset_plan
-from video_edit_agent.agents.creator.schemas import CreatorStyle
 from video_edit_agent.agents.creator.scenes import build_scenes
+from video_edit_agent.agents.creator.schemas import CreatorStyle
 from video_edit_agent.agents.creator.timeline import build_creator_timeline
 from video_edit_agent.core.schemas import MotionEngine, MotionPlanItem
 from video_edit_agent.core.timeline import MasterTimeline
@@ -46,7 +46,7 @@ def test_build_creator_timeline_returns_shared_master_timeline_type(tmp_path: Pa
     scenes = build_scenes(_SCRIPT, analysis)
     asset_plan = build_asset_plan(scenes, CreatorStyle.MOTION)
 
-    timeline, motion_items, broll_items = build_creator_timeline(
+    timeline, _motion_items, _broll_items = build_creator_timeline(
         scenes,
         asset_plan,
         project_root=tmp_path,

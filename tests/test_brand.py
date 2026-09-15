@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from video_edit_agent.brand.loader import BrandNotFoundError, brand_dir, init_brand, load_brand
+from video_edit_agent.brand.loader import BrandNotFoundError, init_brand, load_brand
 from video_edit_agent.brand.schema import Brand
 from video_edit_agent.brand.validator import validate_brand
 

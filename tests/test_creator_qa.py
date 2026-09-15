@@ -20,8 +20,17 @@ from video_edit_agent.agents.creator.qa import (
 )
 from video_edit_agent.agents.creator.schemas import Scene, ScenePurpose
 from video_edit_agent.brand.schema import Brand
-from video_edit_agent.core.schemas import AnimationKind, AnimationSpec, MotionEngine, MotionPlanItem, QASeverity
-from video_edit_agent.core.timeline import MasterTimeline, Provenance, ProviderKind, TimelineItem, TrackType
+from video_edit_agent.core.schemas import (
+    AnimationKind,
+    AnimationSpec,
+    MotionPlanItem,
+    QASeverity,
+)
+from video_edit_agent.core.timeline import (
+    MasterTimeline,
+    TimelineItem,
+    TrackType,
+)
 
 
 def _scene(id_="scene-01", duration=3.0, purpose=ScenePurpose.HOOK, text="hi") -> Scene:

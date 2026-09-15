@@ -67,5 +67,5 @@ def detect_mask(frame_rgb: np.ndarray) -> SubjectMaskResult:
             mask = result.segmentation_mask.astype(np.float32)
             confidence = float(mask.mean())
             return SubjectMaskResult(mask=mask, confidence=confidence)
-    except AttributeError as e:  # noqa: BLE001 - defensive: is_available() should prevent this
+    except AttributeError as e:
         raise SubjectDetectionUnavailable(f"mediapipe API mismatch: {e}") from e

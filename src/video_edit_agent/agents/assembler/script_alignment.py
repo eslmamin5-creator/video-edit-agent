@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from video_edit_agent.agents.assembler.schemas import ScriptAlignmentItem, SceneInventoryItem
+from video_edit_agent.agents.assembler.schemas import SceneInventoryItem, ScriptAlignmentItem
 
 _WORD_RE = re.compile(r"[a-zA-Z؀-ۿ]{3,}")
 _STOPWORDS = {"the", "and", "for", "with", "this", "that", "scene", "clip"}

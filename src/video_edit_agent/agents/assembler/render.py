@@ -15,11 +15,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from video_edit_agent.brand.schema import Brand
-from video_edit_agent.core.schemas import AnimationKind, AnimationSpec, EDL
+from video_edit_agent.core.schemas import EDL, AnimationKind, AnimationSpec
 from video_edit_agent.motion.router import render_motion
 from video_edit_agent.render.composition import Overlay, RenderPlan
 from video_edit_agent.render.export import ExportPreset
-from video_edit_agent.render.ffmpeg import render as render_ffmpeg, render_preview as render_preview_ffmpeg
+from video_edit_agent.render.ffmpeg import render as render_ffmpeg
+from video_edit_agent.render.ffmpeg import render_preview as render_preview_ffmpeg
 
 CTA_CARD_DURATION = 2.0
 

@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -57,17 +56,17 @@ class ProviderKind(str, Enum):
 
 class Provenance(BaseModel):
     kind: ProviderKind = ProviderKind.USER
-    detail: Optional[str] = None  # e.g. model name, prompt id, source filename
+    detail: str | None = None  # e.g. model name, prompt id, source filename
 
 
 class TransitionInfo(BaseModel):
     type: TransitionType = TransitionType.HARD_CUT
     duration: float = 0.0
-    reasoning: Optional[str] = None  # Transition Director's recorded reasoning (section 20)
+    reasoning: str | None = None  # Transition Director's recorded reasoning (section 20)
 
 
 class BrandInfo(BaseModel):
-    brand_name: Optional[str] = None
+    brand_name: str | None = None
     applied: bool = False
 
 
@@ -87,8 +86,8 @@ class TimelineItem(BaseModel):
     in_point: float = 0.0
     out_point: float = 0.0
     layer: int = 0
-    speaker: Optional[str] = None
-    reason: Optional[str] = None
+    speaker: str | None = None
+    reason: str | None = None
     behind_subject: bool = False
     transition_in: TransitionInfo = Field(default_factory=TransitionInfo)
     transition_out: TransitionInfo = Field(default_factory=TransitionInfo)

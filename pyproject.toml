@@ -67,3 +67,10 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint.per-file-ignores]
+# Typer's CLI parameter idiom requires calling typer.Argument()/typer.Option()
+# as a function-call default; this is the documented, required pattern, not a
+# mutable-default bug that B008 is meant to catch.
+"src/video_edit_agent/cli/main.py" = ["B008"]
+"src/video_edit_agent/cli/config.py" = ["B008"]

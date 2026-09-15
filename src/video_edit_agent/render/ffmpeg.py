@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from video_edit_agent.core.media import MediaError, run
+from video_edit_agent.core.media import run
 from video_edit_agent.render.composition import RenderPlan, build_filter_complex
 from video_edit_agent.render.export import ExportPreset
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from video_edit_agent.core.schemas import Segment, Transcript
+from video_edit_agent.core.schemas import Transcript
 from video_edit_agent.editorial.false_starts import FalseStart, analyze_segment
 from video_edit_agent.editorial.repetition import find_repetition_groups, pick_best_take
 

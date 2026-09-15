@@ -9,10 +9,8 @@ needs to know how it was constructed.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, Field
-
 
 # --------------------------------------------------------------------------
 # Unified transcript schema (spec section 7)
@@ -28,7 +26,7 @@ class Word(BaseModel):
 
 class Segment(BaseModel):
     id: str
-    speaker: Optional[str] = None
+    speaker: str | None = None
     start: float
     end: float
     text: str
@@ -41,12 +39,12 @@ class Transcript(BaseModel):
 
     provider: str
     language: str = "auto"
-    locale: Optional[str] = None
+    locale: str | None = None
     duration: float = 0.0
     speakers: list[str] = Field(default_factory=list)
     segments: list[Segment] = Field(default_factory=list)
     verbatim: bool = True
-    raw_provider_response_path: Optional[str] = None
+    raw_provider_response_path: str | None = None
 
     @property
     def full_text(self) -> str:
@@ -88,7 +86,7 @@ class EDLClip(BaseModel):
     source_out: float
     timeline_in: float
     timeline_out: float
-    speaker: Optional[str] = None
+    speaker: str | None = None
     reason: CutReason = CutReason.MANUAL
     transition_in: TransitionType = TransitionType.HARD_CUT
     transition_out: TransitionType = TransitionType.HARD_CUT
@@ -106,7 +104,7 @@ class EDLClip(BaseModel):
     has_real_audio: bool = True
     # LUFS-ish target for a real `loudnorm` pass on this clip's own audio
     # (spec section 7). None means no normalization filter is applied.
-    loudnorm_target_db: Optional[float] = None
+    loudnorm_target_db: float | None = None
     audio_fade_in_ms: int = 0
     audio_fade_out_ms: int = 0
     speed: float = 1.0
@@ -152,8 +150,8 @@ class BrollPlanItem(BaseModel):
     spoken_concept: str
     recommended_visual: str
     source: BrollSourceKind = BrollSourceKind.NONE
-    asset_path: Optional[str] = None
-    prompt: Optional[str] = None
+    asset_path: str | None = None
+    prompt: str | None = None
     aspect_ratio: str = "9:16"
     duration: float = 0.0
     crop_behavior: str = "center_crop"
@@ -176,7 +174,7 @@ class QAIssue(BaseModel):
     category: str  # technical | language | visual | brand
     severity: QASeverity
     message: str
-    timeline_at: Optional[float] = None
+    timeline_at: float | None = None
     auto_repairable: bool = False
 
 
@@ -225,8 +223,8 @@ class AnimationSpec(BaseModel):
     timeline_end: float
     text: str = ""
     subtext: str = ""
-    value: Optional[str] = None
-    engine_hint: Optional[MotionEngine] = None
+    value: str | None = None
+    engine_hint: MotionEngine | None = None
     behind_subject: bool = False
     x: str = "(W-w)/2"
     y: str = "(H-h)/2"
@@ -235,10 +233,10 @@ class AnimationSpec(BaseModel):
 
 class MotionPlanItem(BaseModel):
     spec: AnimationSpec
-    engine_used: Optional[MotionEngine] = None
-    output_path: Optional[str] = None
-    source_path: Optional[str] = None
-    error: Optional[str] = None
+    engine_used: MotionEngine | None = None
+    output_path: str | None = None
+    source_path: str | None = None
+    error: str | None = None
     # Records every engine tried and rejected before `engine_used` succeeded
     # (or before every engine failed), so a fallback is always traceable in
     # project metadata rather than silently substituted (spec V1.1 section 7).

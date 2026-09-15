@@ -14,10 +14,16 @@ from pathlib import Path
 from video_edit_agent.bootstrap import capabilities as cap_mod
 from video_edit_agent.bootstrap import ffmpeg as ffmpeg_mod
 from video_edit_agent.bootstrap import node as node_mod
-from video_edit_agent.bootstrap.dependencies import DEFAULT_PROFILE, InstallResult, install_profile, known_profiles
+from video_edit_agent.bootstrap.dependencies import (
+    DEFAULT_PROFILE,
+    InstallResult,
+    install_profile,
+    known_profiles,
+)
 from video_edit_agent.bootstrap.detect import PythonSelection, detect_os, select_python
 from video_edit_agent.bootstrap.report import SetupState, now_iso, platform_summary, save_state
 from video_edit_agent.bootstrap.runtime import RuntimeStatus, check_runtime, ensure_runtime
+from video_edit_agent.core import capability_router as cap_router
 
 
 @dataclass
@@ -58,14 +64,12 @@ def capability_states_in_runtime(python_executable: str, timeout: float = 30.0) 
     return [cap_mod.CapabilityState(d["name"], d["state"], d["detail"]) for d in data]
 
 
-def capability_matrix_in_runtime(python_executable: str, timeout: float = 30.0) -> dict[str, "cap_router.Capability"] | None:
+def capability_matrix_in_runtime(python_executable: str, timeout: float = 30.0) -> dict[str, cap_router.Capability] | None:
     """Like `capability_states_in_runtime`, but returns the raw `Capability`
     objects (available/detail/verified) that `doctor`/`providers` render, by
     querying `core.capability_router` INSIDE the given interpreter. Returns
     None if the subprocess check itself fails, so callers can fall back to
     an in-process check rather than crashing over a reporting step."""
-    from video_edit_agent.core import capability_router as cap_router
-
     try:
         proc = subprocess.run(
             [python_executable, "-m", "video_edit_agent.core.capability_router"],
@@ -85,7 +89,7 @@ def capability_matrix_in_runtime(python_executable: str, timeout: float = 30.0) 
     }
 
 
-def capability_matrix_for_project(project_root: Path) -> dict[str, "cap_router.Capability"]:
+def capability_matrix_for_project(project_root: Path) -> dict[str, cap_router.Capability]:
     """Best-effort accurate capability matrix for `doctor`/`providers`:
     prefers querying the project's private runtime venv (if healthy) so the
     report reflects what `videoedit setup` actually installed there, rather
@@ -215,8 +219,7 @@ def render_text_report(outcome: SetupOutcome) -> str:
     lines = [f"OS: {outcome.os_kind}"]
     if outcome.python:
         lines.append(outcome.python.explanation)
-    for msg in outcome.messages:
-        lines.append(msg)
+    lines.extend(outcome.messages)
     lines.append(f"ffmpeg: {'OK' if outcome.ffmpeg.healthy else 'missing'} ({outcome.ffmpeg.detail})")
     lines.append(f"ffprobe: {'OK' if outcome.ffprobe.healthy else 'missing'} ({outcome.ffprobe.detail})")
     lines.append(f"node/npm: {outcome.node.detail}")

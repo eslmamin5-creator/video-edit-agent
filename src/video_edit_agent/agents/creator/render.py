@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from video_edit_agent.core.media import MediaError, run
+from video_edit_agent.core.media import run
 from video_edit_agent.core.schemas import EDL, CutReason, EDLClip
 from video_edit_agent.core.timeline import MasterTimeline, TrackType
 from video_edit_agent.render.composition import Overlay, RenderPlan
@@ -32,7 +32,7 @@ def synthesize_background(
         [
             "ffmpeg", "-y",
             "-f", "lavfi", "-i", f"color=c={color}:s={width}x{height}:d={duration:.3f}:r={fps}",
-            "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
             "-t", f"{duration:.3f}",
             "-c:v", "libx264", "-c:a", "aac", "-shortest",
             str(output_path),

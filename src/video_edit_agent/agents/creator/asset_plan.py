@@ -9,9 +9,13 @@ planned, so the plan is offline-safe unconditionally.
 """
 from __future__ import annotations
 
-from video_edit_agent.agents.creator.schemas import AssetPlanItem, AssetTreatment, Scene
+from video_edit_agent.agents.creator.schemas import (
+    AssetPlanItem,
+    AssetTreatment,
+    CreatorStyle,
+    Scene,
+)
 from video_edit_agent.agents.creator.storyboard import _scene_treatment
-from video_edit_agent.agents.creator.schemas import CreatorStyle
 
 _TREATMENT_TO_ASSET = {
     "typography": AssetTreatment.REMOTION_COMPOSITION,

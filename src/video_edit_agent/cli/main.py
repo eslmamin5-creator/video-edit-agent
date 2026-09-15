@@ -12,7 +12,6 @@ Commands:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -21,11 +20,11 @@ from video_edit_agent import __version__
 from video_edit_agent.agents.assembler.pipeline import AssemblerError, run_assembler
 from video_edit_agent.agents.creator.parser import ScriptParseError
 from video_edit_agent.agents.creator.pipeline import run_creator
+from video_edit_agent.bootstrap.setup import capability_matrix_for_project
 from video_edit_agent.brand.loader import BrandNotFoundError, init_brand, load_brand
 from video_edit_agent.brand.validator import validate_brand
 from video_edit_agent.cli import config as config_cli
 from video_edit_agent.cli import setup as setup_cli
-from video_edit_agent.bootstrap.setup import capability_matrix_for_project
 from video_edit_agent.cli.doctor import print_doctor_report
 from video_edit_agent.core.capability_router import full_capability_matrix
 from video_edit_agent.core.config import AppConfig
@@ -73,7 +72,7 @@ def _root(
 @app.command()
 def edit(
     video: Path = typer.Argument(..., exists=True, help="Path to the source video file."),
-    brand: Optional[str] = typer.Option(None, "--brand", help="Brand profile name under brands/."),
+    brand: str | None = typer.Option(None, "--brand", help="Brand profile name under brands/."),
     preset: str = typer.Option("reel", "--preset", help="Export preset: reel|tiktok|shorts|square|landscape."),
     caption_style: str = typer.Option("word-highlight", "--caption-style"),
     offline: bool = typer.Option(False, "--offline", help="Block all cloud calls; local-only pipeline."),
@@ -127,7 +126,7 @@ def edit(
 @app.command()
 def create(
     script: Path = typer.Argument(..., exists=True, help="Path to the source script (.txt/.md/.docx/.pdf)."),
-    brand: Optional[str] = typer.Option(None, "--brand", help="Brand profile name under brands/."),
+    brand: str | None = typer.Option(None, "--brand", help="Brand profile name under brands/."),
     style: str = typer.Option("mixed", "--style", help="Visual style: motion|cinematic|infographic|mixed."),
     preset: str = typer.Option("reel", "--preset", help="Export preset: reel|tiktok|shorts|square|landscape."),
     offline: bool = typer.Option(False, "--offline", help="Block all cloud calls; local-only Creator pipeline."),
@@ -169,8 +168,8 @@ def assemble(
     order: str = typer.Option(
         "preserve", "--order", help="Ordering policy: filename|script (ignored if --preserve-order is set)."
     ),
-    script: Optional[Path] = typer.Option(None, "--script", help="Script file for --order script alignment."),
-    brand: Optional[str] = typer.Option(None, "--brand", help="Brand profile name under brands/."),
+    script: Path | None = typer.Option(None, "--script", help="Script file for --order script alignment."),
+    brand: str | None = typer.Option(None, "--brand", help="Brand profile name under brands/."),
     preset: str = typer.Option("reel", "--preset", help="Export preset: reel|tiktok|shorts|square|landscape."),
     offline: bool = typer.Option(False, "--offline", help="Block all cloud calls; local-only Assembler pipeline."),
 ):

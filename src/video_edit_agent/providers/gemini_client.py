@@ -58,7 +58,7 @@ def analyze_video_segment(video_path: Path, prompt: str, model: str = "gemini-2.
             ],
         )
         return response.text or ""
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise GeminiRequestError(f"Gemini video analysis failed: {exc}") from exc
 
 
@@ -78,7 +78,7 @@ def generate_image(prompt: str, output_path: Path, model: str = "gemini-2.5-flas
         raise GeminiRequestError("Gemini response contained no image data")
     except GeminiRequestError:
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise GeminiRequestError(f"Gemini image generation failed: {exc}") from exc
 
 
@@ -101,5 +101,5 @@ def generate_video(prompt: str, output_path: Path, model: str = "veo-3.0-generat
         client.files.download(file=video.video)
         video.video.save(str(output_path))
         return output_path
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise GeminiRequestError(f"Veo video generation failed: {exc}") from exc

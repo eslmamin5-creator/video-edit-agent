@@ -73,7 +73,7 @@ def test_build_edl_drops_fully_superseded_repeated_segment(sample_video):
         Segment(id="s0", start=0.0, end=1.5, text="hello everyone welcome"),
         Segment(id="s1", start=1.5, end=3.0, text="hello everyone welcome again"),
     ])
-    edl, verdicts = build_edl(transcript, sample_video)
+    edl, _verdicts = build_edl(transcript, sample_video)
     kept_ids = {c.caption_refs[0] for c in edl.clips}
     assert kept_ids == {"s1"}
     assert edl.clips[0].reason in (CutReason.MANUAL, CutReason.SILENCE)

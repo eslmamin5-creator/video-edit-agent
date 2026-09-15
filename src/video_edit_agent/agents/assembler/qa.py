@@ -8,6 +8,7 @@ playability via ffprobe.
 """
 from __future__ import annotations
 
+from itertools import pairwise
 from pathlib import Path
 
 from video_edit_agent.agents.assembler.schemas import SceneInventoryItem
@@ -21,7 +22,6 @@ OVERLAP_TOLERANCE_S = 0.01
 
 def check_scene_coverage(edl: EDL, expected_items: list[SceneInventoryItem]) -> list[QAIssue]:
     issues: list[QAIssue] = []
-    expected_paths = {Path(i.path).resolve() for i in expected_items}
     referenced_paths = []
     for clip in edl.clips:
         p = Path(clip.source_file)
@@ -64,7 +64,7 @@ def _refers_to_scene(resolved_path: Path, item: SceneInventoryItem) -> bool:
 def check_timeline_continuity(edl: EDL) -> list[QAIssue]:
     issues: list[QAIssue] = []
     ordered = sorted(edl.clips, key=lambda c: c.timeline_in)
-    for a, b in zip(ordered, ordered[1:]):
+    for a, b in pairwise(ordered):
         gap = b.timeline_in - a.timeline_out
         if gap > GAP_TOLERANCE_S:
             issues.append(

@@ -4,8 +4,8 @@ from __future__ import annotations
 import pytest
 
 from video_edit_agent.agents.creator.analysis import analyze_script
-from video_edit_agent.agents.creator.schemas import CreatorStyle, Storyboard
 from video_edit_agent.agents.creator.scenes import build_scenes
+from video_edit_agent.agents.creator.schemas import CreatorStyle, Storyboard
 from video_edit_agent.agents.creator.storyboard import build_storyboard, render_storyboard_markdown
 
 _SCRIPT = (

@@ -6,7 +6,13 @@ enrichment, never a requirement (see spec section 16).
 """
 from __future__ import annotations
 
-from video_edit_agent.agents.assembler.schemas import ContinuityFinding, ContinuitySeverity, SceneAnalysis
+from itertools import pairwise
+
+from video_edit_agent.agents.assembler.schemas import (
+    ContinuityFinding,
+    ContinuitySeverity,
+    SceneAnalysis,
+)
 
 _BRIGHTNESS_JUMP_HIGH = 0.35
 _BRIGHTNESS_JUMP_MED = 0.18
@@ -14,7 +20,7 @@ _BRIGHTNESS_JUMP_MED = 0.18
 
 def analyze_continuity(analyses: list[SceneAnalysis]) -> list[ContinuityFinding]:
     findings: list[ContinuityFinding] = []
-    for a, b in zip(analyses, analyses[1:]):
+    for a, b in pairwise(analyses):
         findings.extend(_pair_findings(a, b))
     return findings
 
@@ -65,19 +71,22 @@ def _pair_findings(a: SceneAnalysis, b: SceneAnalysis) -> list[ContinuityFinding
                 )
             )
 
-    if a.motion_direction and b.motion_direction and a.motion_direction != "unknown" and b.motion_direction != "unknown":
-        if _opposing(a.motion_direction, b.motion_direction):
-            findings.append(
-                ContinuityFinding(
-                    from_scene=a.scene_id,
-                    to_scene=b.scene_id,
-                    category="motion_direction",
-                    description=f"motion direction conflict ({a.motion_direction} into {b.motion_direction})",
-                    severity=ContinuitySeverity.LOW,
-                    confidence=0.4,
-                    recommendation="heuristic only (brightness-centroid based); verify manually before acting",
-                )
+    if (
+        a.motion_direction and b.motion_direction
+        and a.motion_direction != "unknown" and b.motion_direction != "unknown"
+        and _opposing(a.motion_direction, b.motion_direction)
+    ):
+        findings.append(
+            ContinuityFinding(
+                from_scene=a.scene_id,
+                to_scene=b.scene_id,
+                category="motion_direction",
+                description=f"motion direction conflict ({a.motion_direction} into {b.motion_direction})",
+                severity=ContinuitySeverity.LOW,
+                confidence=0.4,
+                recommendation="heuristic only (brightness-centroid based); verify manually before acting",
             )
+        )
 
     if a.aspect_ratio and b.aspect_ratio and a.aspect_ratio != b.aspect_ratio:
         findings.append(

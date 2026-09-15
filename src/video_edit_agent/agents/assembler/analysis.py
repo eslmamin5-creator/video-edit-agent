@@ -91,7 +91,7 @@ def _safe_open(path: Path) -> Image.Image | None:
         return None
     try:
         return Image.open(path).convert("RGB")
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort image read, never fatal
         return None
 
 

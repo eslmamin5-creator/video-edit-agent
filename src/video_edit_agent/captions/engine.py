@@ -55,7 +55,7 @@ def _fmt_srt_time(t: float) -> str:
     h = int(t // 3600)
     m = int((t % 3600) // 60)
     s = int(t % 60)
-    ms = int(round((t - int(t)) * 1000))
+    ms = round((t - int(t)) * 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 

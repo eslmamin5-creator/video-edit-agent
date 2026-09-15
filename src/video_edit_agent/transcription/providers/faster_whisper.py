@@ -37,7 +37,7 @@ class FasterWhisperProvider(TranscriptionProvider):
         if key not in _model_cache:
             try:
                 _model_cache[key] = WhisperModel(self.model_size, device=device, compute_type=compute_type)
-            except Exception as e:  # noqa: BLE001 - model download/network errors vary by backend
+            except Exception as e:
                 raise TranscriptionUnavailable(
                     f"Local Whisper model '{self.model_size}' is not available locally and could not be "
                     f"prepared ({e}). Run `videoedit setup` first, or prepare it explicitly before going "

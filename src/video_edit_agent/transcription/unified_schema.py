@@ -6,4 +6,4 @@ through the `transcription` package.
 """
 from video_edit_agent.core.schemas import Segment, Transcript, Word
 
-__all__ = ["Transcript", "Segment", "Word"]
+__all__ = ["Segment", "Transcript", "Word"]

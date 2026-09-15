@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from video_edit_agent.core.media import run
-from video_edit_agent.core.schemas import AnimationKind, AnimationSpec
+from video_edit_agent.core.schemas import AnimationSpec
 
 
 class ManimUnavailable(RuntimeError):

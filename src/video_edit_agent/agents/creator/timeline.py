@@ -12,7 +12,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from video_edit_agent.agents.creator.schemas import AssetPlanItem, AssetTreatment, Scene, ScenePurpose
+from video_edit_agent.agents.creator.schemas import (
+    AssetPlanItem,
+    AssetTreatment,
+    Scene,
+    ScenePurpose,
+)
 from video_edit_agent.brand.schema import Brand
 from video_edit_agent.broll.providers.local import find_broll
 from video_edit_agent.core.schemas import (

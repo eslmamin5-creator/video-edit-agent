@@ -10,7 +10,6 @@ default brand) see pixel-identical output to before this was added.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -130,7 +129,7 @@ class SimpleMotionError(RuntimeError):
 
 
 def render_animation(
-    spec: AnimationSpec, output_path: Path, canvas: tuple[int, int] = DEFAULT_CANVAS, brand: Optional[object] = None
+    spec: AnimationSpec, output_path: Path, canvas: tuple[int, int] = DEFAULT_CANVAS, brand: object | None = None
 ) -> Path:
     """Renders a single transparent PNG frame for the animation. Static PNGs
     are intentionally simple (spec section 17's 'simple engine' tier); the
@@ -141,7 +140,7 @@ def render_animation(
     draw = ImageDraw.Draw(image)
     try:
         renderer(draw, spec, canvas, palette)
-    except Exception as e:  # noqa: BLE001 - never let a motion graphic crash the whole render
+    except Exception as e:
         raise SimpleMotionError(f"simple engine failed to render {spec.kind}: {e}") from e
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
