@@ -50,6 +50,16 @@ generation — see the Phase 2 Finalization spec for full scope.
   boundaries; now compares the observed overlap against the boundary
   clip's own declared `transition_duration_s`.
 
+### Fixed (release-gate audit, 2026-09-15)
+- Corrected stale documentation (`README.md`, `README.ar.md`, this file) that
+  claimed Behind-Subject video compositing was unimplemented. It was already
+  fully implemented and wired in `74335bb` (the Phase 2 foundational slice,
+  an ancestor of this release): `core/pipeline.py` renders a real RGBA
+  subject cutout and places it after the graphic overlay in `plan.overlays`,
+  and `render/composition.py` composites overlays in list order via
+  ffmpeg's alpha-aware `overlay` filter — no special-casing needed. Verified
+  with 8/8 real (non-mocked, non-skipped) tests in `tests/test_behind_subject.py`.
+
 ### Known limitations
 - J-Cut/L-Cut (audio-lead/audio-trail edits) remain conceptual only — the
   Transition Director never proposes one. Deferred intentionally; not a
@@ -57,8 +67,6 @@ generation — see the Phase 2 Finalization spec for full scope.
 - HyperFrames motion engine remains unavailable/unverified in this
   environment (see 0.1.1 notes); the router's traceable fallback to a
   working engine is unaffected and remains verified.
-- Behind-Subject video compositing (rendering an element visibly behind a
-  subject) remains unimplemented — unchanged from 0.1.1.
 
 ## [0.1.1] - 2026-09-13
 
