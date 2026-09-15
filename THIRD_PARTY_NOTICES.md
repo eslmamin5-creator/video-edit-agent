@@ -33,7 +33,7 @@ Remotion template component layout (`Ad.tsx`, `Captions.tsx`, `Chrome.tsx`,
 
 **Adapted (architectural inspiration, rewritten in this project's own code):**
 - The general idea of a numbered, resumable editing pipeline (media -> cut
-  plan -> captions -> render -> safe-zone QA) informed `editorial/pipeline.py`
+  plan -> captions -> render -> safe-zone QA) informed `editorial/planner.py`
   and the `edit/` output-directory convention (§14 of the build spec).
 - The "behind-subject" text/graphic compositing concept informed
   `subject/compositor.py`.
