@@ -93,6 +93,24 @@ bundled `skills/manim-video` skill.
 
 ---
 
+## 3. Third-Party Python Dependencies
+
+The following is a regular pip dependency of this project (declared in
+`pyproject.toml`, installed from PyPI at install/setup time) -- it is not
+vendored or copied into this repository, and no source code from it is
+included here.
+
+- **python-bidi** (https://github.com/MeirKriheli/python-bidi) -- used for
+  Unicode bidirectional (BiDi) text algorithm support in the Arabic caption
+  engine (`captions/`). Licensed under the GNU Lesser General Public License
+  (LGPL), per its PyPI classifier. This project's own code remains MIT
+  licensed; using an LGPL library as an external, unmodified dependency (via
+  normal `pip install`, not static linking or source inclusion) does not
+  itself relicense this project. Users who redistribute this project should
+  independently review python-bidi's license terms for their own use case.
+
+---
+
 ## Summary
 
 No source files were copied verbatim from either upstream. Both projects
