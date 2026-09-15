@@ -83,7 +83,7 @@ videoedit setup --profile full-local
 | `videoedit setup` | Full bootstrap with the recommended `full-local` (offline) profile. |
 | `videoedit setup --profile local\|subject\|motion\|core` | Bootstrap with a narrower install profile. |
 | `videoedit setup --check` | Read-only: reports readiness, changes nothing. |
-| `videoedit setup --repair` | Rebuilds a broken/missing private runtime; never touches anything outside `.runtime/`. |
+| `videoedit setup --repair` | Force-rebuilds the private runtime from scratch, even if it currently appears healthy; never touches anything outside `.runtime/`. |
 
 Re-running `videoedit setup` is always safe — it's idempotent and reuses a
 healthy runtime instead of reinstalling.

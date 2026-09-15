@@ -16,6 +16,11 @@ venv/
 dist/
 build/
 
+# Private per-project runtime (bootstrap-managed: venv + setup_state.json +
+# any other generated fresh-install state; never touched by hand, never
+# tracked -- see src/video_edit_agent/bootstrap/)
+.runtime/
+
 # Node / Remotion
 node_modules/
 npm-debug.log*

@@ -8,7 +8,7 @@ routing to get to a working install.
   videoedit setup                       # full bootstrap, profile=full-local
   videoedit setup --profile local       # bootstrap with a narrower profile
   videoedit setup --check               # read-only: report readiness, change nothing
-  videoedit setup --repair              # rebuild a broken/missing private runtime
+  videoedit setup --repair              # force-rebuild the private runtime, even if it looks healthy
 """
 from __future__ import annotations
 
@@ -34,7 +34,10 @@ def main(
         help=f"Install profile: one of {', '.join(known_profiles())}.",
     ),
     check: bool = typer.Option(False, "--check", help="Read-only: report readiness, make no changes."),
-    repair: bool = typer.Option(False, "--repair", help="Rebuild a broken/missing private runtime."),
+    repair: bool = typer.Option(
+        False, "--repair",
+        help="Force-rebuild the private runtime from scratch, even if it currently appears healthy.",
+    ),
 ) -> None:
     project_root = Path.cwd()
 

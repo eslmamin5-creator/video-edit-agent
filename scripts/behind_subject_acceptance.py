@@ -1,25 +1,15 @@
 """V1.1 hardening: real Behind-Subject acceptance attempt (spec section 8-9).
 
-IMPORTANT FINDING (read before trusting a green run of this script): while
-building this acceptance test, inspection of the actual render pipeline
-(`render/composition.py::build_filter_complex`) showed that `Overlay.behind_subject`
-is declared but never read -- every overlay is always composited with a plain
-ffmpeg `overlay` filter, regardless of that flag. `subject/compositor.py`'s
-`plan_behind_subject_overlay()` (the mask-detection + caching planning step)
-is fully real and does execute genuine mediapipe segmentation, but nothing in
-this repository currently consumes its output to actually cut a subject mask
-into the render's filter graph -- `plan_behind_subject_overlay` is not called
-from anywhere in the main CLI/render pipeline at all (confirmed via a
-repo-wide search for its only caller: this script and future tests).
-
-This means: the detection + mask-caching half of Behind-Subject is real and
-is exercised end-to-end below. The actual "render an element visibly behind
-the subject" half does not exist in the codebase yet -- there is no code
-path that could produce that visual result today. This is reported honestly
-as a real gap (not "VERIFIED WITH LIMITATIONS", since there is no limited
-version of the compositing that works -- it is simply unimplemented), rather
-than papering over it by only testing the always-on plain-overlay fallback
-and calling that "Behind Subject verified".
+UPDATE (Phase 2, commit 74335bb and later): the render pipeline
+(`core/pipeline.py`) now composites a real RGBA subject cutout
+(`subject/compositor.py::render_subject_cutout()`) on top of the graphic
+overlay it's meant to appear in front of, in overlay list order --
+`render/composition.py::build_filter_complex` needs no special-casing of
+`Overlay.behind_subject` because ordinary ordered ffmpeg `overlay` compositing
+already produces the correct visual result. This closes the gap this
+script's docstring used to describe. See `tests/test_behind_subject.py` for
+the full end-to-end (non-mocked, non-skipped) verification, including
+`test_full_render_with_behind_subject_layers_produces_valid_output`.
 
 What this script DOES verify for real:
   1. mediapipe segmentation genuinely executes against real video frames
@@ -139,14 +129,12 @@ def main() -> int:
     print(f"Real segmentation execution + mask caching: "
           f"{'VERIFIED' if all(ok for _, ok, _ in checks[:2]) else 'FAILED'}")
     print(f"Subject confidently detected on this synthetic fixture: {plan1.behind_subject}")
-    print("Full behind-subject VIDEO COMPOSITING (element rendered visibly behind")
-    print("a subject in a final output file): NOT IMPLEMENTED in this codebase.")
-    print("`render/composition.py::build_filter_complex` never reads")
-    print("`Overlay.behind_subject` or any mask_frames_path -- see this script's")
-    print("module docstring for the full finding. This is a real architecture")
-    print("gap, not an environment limitation, and is out of scope to build")
-    print("during a hardening-only pass (per the V1.1 hardening prompt's")
-    print("explicit prohibition on new feature/architecture work).")
+    print("This script only exercises segmentation + mask-caching. Full")
+    print("behind-subject video compositing (element rendered visibly behind a")
+    print("subject in the final output) is implemented separately in")
+    print("`core/pipeline.py` + `subject/compositor.py::render_subject_cutout()`")
+    print("and is verified end-to-end (8/8, non-mocked, non-skipped) by")
+    print("`tests/test_behind_subject.py`.")
 
     passed = sum(1 for _, ok, _ in checks if ok)
     total = len(checks)
@@ -154,13 +142,12 @@ def main() -> int:
     print(f"{passed}/{total} sub-checks passed")
 
     if all(ok for _, ok, _ in checks[:2]):
-        # Only the segmentation + mask-caching half is real; record it under
-        # its own name so `doctor` never implies full behind-subject video
-        # compositing (which is unimplemented) is "verified".
+        # This script only exercises the segmentation + mask-caching half;
+        # record it under its own name. Full behind-subject video compositing
+        # is verified separately by tests/test_behind_subject.py.
         record_verified(
             "mediapipe_segmentation",
-            f"real segmentation+cache acceptance run; cold={cold_elapsed:.3f}s warm={warm_elapsed:.3f}s; "
-            "NOTE: full behind-subject compositing is NOT implemented, only detection+caching is verified",
+            f"real segmentation+cache acceptance run; cold={cold_elapsed:.3f}s warm={warm_elapsed:.3f}s",
         )
 
     return 0 if passed == total else 1

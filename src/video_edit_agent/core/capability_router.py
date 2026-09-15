@@ -113,10 +113,11 @@ def detect_hyperframes() -> Capability:
 
 
 def detect_mediapipe() -> Capability:
-    """Reports mask detection+caching verification only -- NOT full
-    behind-subject video compositing, which is architecturally unimplemented
-    (render/composition.py never consumes Overlay.behind_subject). Never
-    conflate this "verified" with "behind-subject rendering works"."""
+    """Reports mediapipe mask detection+caching verification. Full
+    behind-subject video compositing is implemented in `core/pipeline.py`
+    (real RGBA subject cutout layered on top of the graphic overlay via
+    ordinary overlay-list order; see `tests/test_behind_subject.py`) and
+    depends on this same mediapipe segmentation being available."""
     from video_edit_agent.subject.detect import is_available as mediapipe_ok
 
     ok = mediapipe_ok()
@@ -127,11 +128,7 @@ def detect_mediapipe() -> Capability:
         )
         return Capability("mediapipe (behind-subject)", False, detail)
     verified, verified_detail = is_verified("mediapipe_segmentation")
-    detail = (
-        f"installed, legacy Solutions API present; segmentation+cache {verified_detail}. "
-        "NOTE: full behind-subject video compositing is NOT implemented in this codebase "
-        "(only detection/caching is real) -- see docs/known limitations."
-    )
+    detail = f"installed, legacy Solutions API present; segmentation+cache {verified_detail}."
     return Capability("mediapipe (behind-subject)", True, detail, verified=verified)
 
 
@@ -171,3 +168,12 @@ def full_capability_matrix() -> dict[str, Capability]:
         detect_claude_code, detect_codex,
     ]
     return {c().name: c() for c in checks}
+
+
+if __name__ == "__main__":  # pragma: no cover -- exercised via subprocess in tests
+    import json
+
+    print(json.dumps([
+        {"name": c.name, "available": c.available, "detail": c.detail, "verified": c.verified}
+        for c in full_capability_matrix().values()
+    ]))

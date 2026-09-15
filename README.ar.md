@@ -82,7 +82,7 @@ videoedit setup --profile full-local
 | `videoedit setup` | إعداد كامل بالحزمة الموصى بها `full-local` (دون اتصال). |
 | `videoedit setup --profile local\|subject\|motion\|core` | إعداد بحزمة تثبيت أضيق. |
 | `videoedit setup --check` | للقراءة فقط: يعرض الجاهزية دون أي تغيير. |
-| `videoedit setup --repair` | يعيد بناء بيئة تشغيل معطوبة أو مفقودة؛ لا يمس أي شيء خارج `.runtime/`. |
+| `videoedit setup --repair` | يعيد بناء بيئة التشغيل الخاصة من الصفر بالكامل، حتى لو بدت سليمة حاليًا؛ لا يمس أي شيء خارج `.runtime/`. |
 
 إعادة تشغيل `videoedit setup` آمنة دائمًا — فهي متكررة النتيجة (idempotent)
 وتعيد استخدام بيئة سليمة بدلًا من إعادة التثبيت.

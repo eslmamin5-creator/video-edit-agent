@@ -25,6 +25,7 @@ from video_edit_agent.brand.loader import BrandNotFoundError, init_brand, load_b
 from video_edit_agent.brand.validator import validate_brand
 from video_edit_agent.cli import config as config_cli
 from video_edit_agent.cli import setup as setup_cli
+from video_edit_agent.bootstrap.setup import capability_matrix_for_project
 from video_edit_agent.cli.doctor import print_doctor_report
 from video_edit_agent.core.capability_router import full_capability_matrix
 from video_edit_agent.core.config import AppConfig
@@ -218,7 +219,7 @@ def doctor():
 @app.command()
 def providers():
     """List transcription and motion providers with their availability."""
-    matrix = full_capability_matrix()
+    matrix = capability_matrix_for_project(Path.cwd())
     console.print("[bold]Transcription providers[/bold]")
     for name in ("gemini_key", "elevenlabs_key", "faster-whisper", "openai-whisper", "whisper.cpp"):
         cap = matrix[name]

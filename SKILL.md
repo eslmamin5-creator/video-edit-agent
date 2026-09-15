@@ -28,8 +28,8 @@ until it reports ready:
    stores any API key.
 4. Re-running `videoedit setup` is always safe (idempotent) — use it to
    verify readiness at any time. `videoedit setup --check` does the same
-   check without changing anything. `videoedit setup --repair` rebuilds a
-   broken runtime.
+   check without changing anything. `videoedit setup --repair` force-rebuilds
+   the private runtime from scratch, even if it currently appears healthy.
 5. Once it reports ready, use the private runtime's own CLI going forward:
    `.runtime/venv/bin/videoedit` (`.runtime\venv\Scripts\videoedit.exe` on
    Windows) — or just `videoedit` if that path is on PATH.

@@ -23,8 +23,9 @@ it up -> start making videos," not "become a Python developer first."
   persistence (`.runtime/setup_state.json`).
 - `videoedit setup --profile full-local|local|subject|motion|core`,
   `videoedit setup --check` (read-only, makes no changes), and
-  `videoedit setup --repair` (rebuilds a broken/missing private runtime
-  without touching anything outside `.runtime/`). Re-running setup is
+  `videoedit setup --repair` (force-rebuilds the private runtime from
+  scratch, even if it currently appears healthy, without touching anything
+  outside `.runtime/`). Re-running setup is
   idempotent and fast (pip no-ops on an already-satisfied profile).
 - `videoedit doctor` now also reports the last `videoedit setup` run
   (profile, Python version, verification timestamp) when setup state

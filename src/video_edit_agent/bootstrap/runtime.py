@@ -78,9 +78,10 @@ def create_runtime(project_root: Path, base_python: str) -> RuntimeStatus:
 
 
 def rebuild_runtime(project_root: Path, base_python: str) -> RuntimeStatus:
-    """Repair path (spec `--repair`): removes a broken runtime and recreates
-    it. Never touches anything outside `.runtime/` -- user media, caches, and
-    project source are untouched."""
+    """Repair path (spec `--repair`): unconditionally removes the existing
+    runtime -- healthy or not -- and recreates it from scratch. Never touches
+    anything outside `.runtime/` -- user media, caches, and project source
+    are untouched."""
     import shutil
 
     rdir = runtime_dir(project_root)
@@ -91,7 +92,8 @@ def rebuild_runtime(project_root: Path, base_python: str) -> RuntimeStatus:
 
 def ensure_runtime(project_root: Path, base_python: str, repair: bool = False) -> RuntimeStatus:
     """Idempotent entry point: reuses a healthy runtime, creates one if
-    missing, rebuilds only if unhealthy or `repair=True` was requested."""
+    missing, and unconditionally force-rebuilds it whenever `repair=True` is
+    passed -- even if the runtime currently appears healthy."""
     status = check_runtime(project_root)
     if status.healthy and not repair:
         return status

@@ -17,7 +17,7 @@ from video_edit_agent.bootstrap import node as node_mod
 from video_edit_agent.bootstrap.dependencies import DEFAULT_PROFILE, InstallResult, install_profile, known_profiles
 from video_edit_agent.bootstrap.detect import PythonSelection, detect_os, select_python
 from video_edit_agent.bootstrap.report import SetupState, now_iso, platform_summary, save_state
-from video_edit_agent.bootstrap.runtime import RuntimeStatus, ensure_runtime
+from video_edit_agent.bootstrap.runtime import RuntimeStatus, check_runtime, ensure_runtime
 
 
 @dataclass
@@ -56,6 +56,53 @@ def capability_states_in_runtime(python_executable: str, timeout: float = 30.0) 
     except json.JSONDecodeError:
         return None
     return [cap_mod.CapabilityState(d["name"], d["state"], d["detail"]) for d in data]
+
+
+def capability_matrix_in_runtime(python_executable: str, timeout: float = 30.0) -> dict[str, "cap_router.Capability"] | None:
+    """Like `capability_states_in_runtime`, but returns the raw `Capability`
+    objects (available/detail/verified) that `doctor`/`providers` render, by
+    querying `core.capability_router` INSIDE the given interpreter. Returns
+    None if the subprocess check itself fails, so callers can fall back to
+    an in-process check rather than crashing over a reporting step."""
+    from video_edit_agent.core import capability_router as cap_router
+
+    try:
+        proc = subprocess.run(
+            [python_executable, "-m", "video_edit_agent.core.capability_router"],
+            capture_output=True, text=True, timeout=timeout, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    return {
+        d["name"]: cap_router.Capability(d["name"], d["available"], d["detail"], d.get("verified"))
+        for d in data
+    }
+
+
+def capability_matrix_for_project(project_root: Path) -> dict[str, "cap_router.Capability"]:
+    """Best-effort accurate capability matrix for `doctor`/`providers`:
+    prefers querying the project's private runtime venv (if healthy) so the
+    report reflects what `videoedit setup` actually installed there, rather
+    than whatever happens to be importable in the interpreter currently
+    running the `videoedit` entry point. That entry point is often installed
+    against the global/system Python (`pip install -e .` in the docs'
+    Option B), which is NOT the private runtime and can under- or
+    over-report capabilities depending on whatever else happens to be
+    installed globally (see `capability_states_in_runtime`)."""
+    from video_edit_agent.core.capability_router import full_capability_matrix
+
+    status = check_runtime(project_root)
+    if status.healthy:
+        matrix = capability_matrix_in_runtime(str(status.python_path))
+        if matrix is not None:
+            return matrix
+    return full_capability_matrix()
 
 
 def run_check(project_root: Path) -> SetupOutcome:

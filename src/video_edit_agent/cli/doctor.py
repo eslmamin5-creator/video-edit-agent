@@ -10,11 +10,11 @@ from rich.console import Console
 from rich.table import Table
 
 from video_edit_agent.bootstrap.report import load_state
-from video_edit_agent.core.capability_router import full_capability_matrix
+from video_edit_agent.bootstrap.setup import capability_matrix_for_project
 
 
 def print_doctor_report(console: Console) -> None:
-    matrix = full_capability_matrix()
+    matrix = capability_matrix_for_project(Path.cwd())
     table = Table(title="videoedit doctor — capability matrix")
     table.add_column("Capability")
     table.add_column("Installed/Configured")
