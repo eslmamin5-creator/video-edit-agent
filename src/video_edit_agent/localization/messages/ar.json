@@ -11,5 +11,7 @@
   "offline_mode": "وضع عدم الاتصال مفعّل — لن يتم إجراء أي طلبات سحابية.",
   "provider_fallback": "تعذر استخدام {provider}، جاري التبديل إلى {fallback}.",
   "error_generic": "حدث خطأ: {message}",
-  "project_resumed": "تم استئناف المشروع من العمل السابق."
+  "project_resumed": "تم استئناف المشروع من العمل السابق.",
+  "onboarding_invitation": "ارفع فيديو، أو ابعت سكربت، أو حدّد فولدر المشاهد وقلّي عايز تعمل إيه.",
+  "readiness_summary": "جاهز للاستخدام. Editor وCreator وAssembler متاحين. التشغيل المحلي يعمل بدون مفاتيح API، والميزات السحابية اختيارية."
 }

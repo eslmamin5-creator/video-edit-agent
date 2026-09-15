@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "video-edit-agent"
-version = "0.2.1"
+version = "0.2.2"
 description = "Arabic-first, provider-agnostic AI video editing agent (CLI: videoedit)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,6 +34,11 @@ motion = ["manim>=0.18"]
 # verified (by direct import test) to still expose it.
 subject = ["mediapipe==0.10.21", "opencv-python-headless>=4.9"]
 dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.4", "mypy>=1.10"]
+# Documentation tooling only -- never imported by the runtime pipeline.
+# Used solely by scripts/build_user_guide.py to render docs/USER_GUIDE*.md
+# into the PDF user guides. arabic-reshaper/python-bidi are already runtime
+# deps under "local"/"full-local" and are reused here for Arabic PDF shaping.
+docs = ["reportlab>=4.0", "markdown>=3.5", "arabic-reshaper>=3.0", "python-bidi>=0.4"]
 # Recommended offline install profile (spec v0.2.1 installation UX): everything
 # needed for Editor/Creator/Assembler fully offline -- local transcription,
 # Arabic captions, behind-subject compositing, local motion. No cloud SDKs.

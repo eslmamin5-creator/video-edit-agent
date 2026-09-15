@@ -19,12 +19,66 @@ full design rationale.
 
 The single most important constraint in this codebase: **never translate,
 rewrite, formalize, or localize spoken Arabic into a different dialect.**
-Transcription is verbatim; the source audio has final authority. Any code
+
+`TRANSCRIBE, DON'T TRANSLATE / REWRITE / FORMALIZE / DIALECT-CONVERT`
+
+Egyptian, Gulf, Saudi, MSA, and code-switched Arabic/English speech must all
+be preserved exactly as spoken. This applies regardless of what language the
+user is typing to the agent in — see "Interaction language: follow the user,
+not the transcript" below for that distinction. Transcription is verbatim;
+the source audio has final authority. Any code
 that touches transcript text before it reaches captions/EDL must go through
 or respect `src/video_edit_agent/language/dialect_guard.py`
 (`check_no_dialect_substitution()` / `enforce()`). If you are unsure whether a
 change could alter dialect content, run `tests/test_dialect_guard.py` and
 treat any failure as a hard blocker, not a warning.
+
+## Interaction language: follow the user, not the transcript
+
+**Interaction language is independent from media/transcript language.** These
+are two separate things and must never be conflated:
+
+- **Interaction language** — the language you (the agent) use to talk to the
+  user: onboarding, status updates, questions, explanations, error messages,
+  completion reports. Follow whatever language the user is currently writing
+  in. If they write Arabic, respond in Arabic; if they switch to English,
+  switch with them. Arabic responses should be clear, natural, everyday
+  Arabic — not stiff, overly formal MSA translation-ese.
+- **Media/transcript language and dialect** — whatever was actually spoken in
+  the source video. This is governed entirely by the non-negotiable rule
+  below and is never adjusted based on which language the user happens to be
+  typing in. A user typing in Arabic about an English-language source video
+  does not mean the transcript becomes Arabic, and a user typing in English
+  about an Egyptian-dialect video does not mean the transcript gets
+  translated or formalized.
+
+When a user's very first message is a capability question — variants of
+"إنت بتعمل إيه؟" / "ممكن تعمل إيه؟" / "What can you do?" / "How do I use
+this?" — give the short three-workflow onboarding explanation (Editor /
+Creator / Assembler; see `README.md` "What can video-edit-agent do?" section
+for the canonical wording) in the user's language, then end with an
+invitation to upload a video, send a script, or point at a scenes folder.
+Don't front-load CLI flags or package internals in that first answer.
+
+## Natural-language workflow routing
+
+There is no NLU/intent-classification code in this repository — routing a
+user's plain-language request to `videoedit edit` / `videoedit create` /
+`videoedit assemble` is something you (the agent) do by reading their
+request, not something to build as a parser. Use judgment, not exact string
+matching, and don't require the user to know CLI syntax:
+
+| User says (Arabic) | User says (English) | Route to |
+|---|---|---|
+| `عدل الفيديو ده` / `نضف الفيديو ده وحط كابشن` | "Edit this video" / "clean this up and add captions" | **Editor** (`videoedit edit`) — one existing raw take |
+| `اعمل فيديو من السكربت ده` / `حوّل السكربت ده لفيديو` | "Create a video from this script" | **Creator** (`videoedit create`) — a script or idea, no footage yet |
+| `اجمع المشاهد دي` / `اعمل rough cut للمشاهد دي` | "Assemble these scenes into one film" | **Assembler** (`videoedit assemble`) — a folder of multiple pre-shot clips |
+
+If intent is genuinely ambiguous (e.g. the user has both a script and
+existing footage and doesn't say which they want), ask one concise
+clarifying question rather than guessing. Don't expose internal CLI syntax
+in the answer unless it's actually useful to the user (e.g. they asked a
+technical question, or you're reporting the exact command you ran).
 
 ## Architecture map
 

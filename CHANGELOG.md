@@ -3,6 +3,45 @@
 All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.2.2] - 2026-09-15
+
+Arabic-first UX, product onboarding, and user guide only -- Editor / Creator
+/ Assembler, rendering, provider routing, and bootstrap/runtime architecture
+are unchanged. Goal: a first-time user should understand what this agent
+does, how Editor/Creator/Assembler differ, and how Arabic support works
+within a minute, without reading source code.
+
+### Added
+- Agent instructions (`agent/core_instructions.md`, `SKILL.md`) now
+  explicitly separate **interaction language** (follows the user, Arabic in
+  / Arabic out, English in / English out) from **media/transcript
+  language** (governed only by the dialect-preservation rule, never
+  adjusted by interaction language), and document a natural-language
+  routing table so users can say "عدل الفيديو ده" / "Edit this video"
+  instead of memorizing `videoedit edit|create|assemble`.
+- `docs/USER_GUIDE.md` and `docs/USER_GUIDE.ar.md` — user-facing (not
+  developer/architecture) guides covering the three workflows, feature
+  overview, Arabic-first experience, offline-vs-cloud table, install path,
+  and first-conversation examples.
+- `docs/video-edit-agent-user-guide.pdf` and `-ar.pdf`, generated
+  reproducibly from the Markdown guides via `scripts/build_user_guide.py`
+  (`pip install -e ".[docs]"`; PDF tooling is documentation-only, never a
+  runtime dependency).
+- `README.md` / `README.ar.md` restructured product-first: hero, language
+  switch, what the agent does, Editor/Creator/Assembler, feature guide,
+  Arabic-first capabilities, offline-vs-cloud, install, first-conversation
+  examples, then technical CLI usage.
+- Localization keys `onboarding_invitation` and `readiness_summary` in
+  `localization/messages/{en,ar}.json` for the first-use invitation and a
+  localized readiness summary (Arabic readiness responses no longer default
+  to an English capability report).
+- Tests for interaction-language selection on capability questions and for
+  README/user-guide link integrity.
+
+### Unchanged
+No changes to Editor, Creator, Assembler, MasterTimeline, rendering logic,
+provider routing, or bootstrap/runtime architecture in this release.
+
 ## [0.2.1] - 2026-09-15
 
 Installation and first-run UX only -- Editor/Creator/Assembler, Brand

@@ -11,5 +11,7 @@
   "offline_mode": "Offline mode is on — no cloud requests will be made.",
   "provider_fallback": "Could not use {provider}, falling back to {fallback}.",
   "error_generic": "Error: {message}",
-  "project_resumed": "Project resumed from previous work."
+  "project_resumed": "Project resumed from previous work.",
+  "onboarding_invitation": "Upload a video, send a script, or point me at a folder of scenes and tell me what you want.",
+  "readiness_summary": "Ready to use. Editor, Creator, and Assembler are all available. Local/offline runs need no API keys; cloud features are optional."
 }

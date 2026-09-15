@@ -1,39 +1,111 @@
 # video-edit-agent
 
-An Arabic-first, model-agnostic AI video editing agent. It turns a raw talking-head
-or ad take into a captioned, cut, motion-graphics-enhanced final video — entirely
-offline if you want, or enhanced by cloud providers if you give it API keys.
+**Talk to it in plain language — Arabic or English — and it turns raw
+footage, a script, or a folder of scenes into a finished, captioned video.**
+Fully offline if you want it, enhanced by cloud providers if you give it API
+keys. CLI command: `videoedit`.
 
-CLI command: `videoedit`. See [README.ar.md](README.ar.md) for the Arabic version.
+**English | [العربية](README.ar.md)**
 
-Three agents cover three workflows, all offline-capable:
+📘 **[User Guide (English) — PDF](docs/video-edit-agent-user-guide.pdf) · [Markdown](docs/USER_GUIDE.md)**
+📗 **[دليل المستخدم (العربية) — PDF](docs/video-edit-agent-user-guide-ar.pdf) · [Markdown](docs/USER_GUIDE.ar.md)**
 
-- **Editor** (`videoedit edit`) — turns one raw take into a captioned, cut final video.
-- **Creator** (`videoedit create`) — turns a script into a full storyboard, asset plan, and rendered final video.
-- **Assembler** (`videoedit assemble`) — turns a folder of pre-shot scenes into a rough cut (`--rough`) and then a finished film (`--finish`) with real transitions and loudness normalization between scenes.
+---
 
-## Philosophy
+## What can video-edit-agent do?
 
-- **Arabic-first, dialect-preserving.** The agent transcribes exactly what was
-  said — Egyptian, Gulf, Saudi, MSA, code-switched Arabic/English — and never
-  rewrites, formalizes, or "corrects" the dialect into another one. Source audio
-  has final authority. See `language/dialect_guard.py`.
-- **Works with zero API keys.** Every cloud-backed feature (Gemini transcription
-  and vision, ElevenLabs, Veo image/video generation) has a graceful, automatic
-  fallback. With no keys at all, `videoedit edit` still transcribes locally
-  (Faster-Whisper), builds an EDL, captions, composites, and renders a final
-  video — just without cloud-only enhancements.
-- **Cloud-enhanced, not cloud-dependent.** Set `GEMINI_API_KEY` and/or
-  `ELEVENLABS_API_KEY` as environment variables (never in a config file) to
-  unlock better transcription, generated B-roll, and visual QA.
-- **Modular and inspectable.** Every stage (transcript, EDL, captions, B-roll
-  plan, motion plan, QA report) is a plain JSON/text artifact under
-  `<video>/edit/`, and `project.md` keeps a human-readable memory of what the
-  agent decided and why.
+Open Claude Code, install/open `video-edit-agent`, talk naturally, and get a
+video — you don't need to read technical docs or memorize CLI commands
+first. There are three workflows, and you say what you want in your own
+words; the agent figures out which one to run:
 
-## Install
+| You have... | You say (example) | It runs |
+|---|---|---|
+| One raw take (talking-head, ad, interview) | "Edit this video" / "عدل الفيديو ده" | **Editor** |
+| A script or an idea, no footage yet | "Create a video from this script" / "اعمل فيديو من السكربت ده" | **Creator** |
+| Several pre-shot scenes/clips | "Assemble these scenes into one film" / "اجمع المشاهد دي" | **Assembler** |
 
-### Option A — Claude Code Skill (recommended for most users)
+If what you want is genuinely ambiguous, the agent asks one short
+clarifying question instead of guessing.
+
+## Editor / Creator / Assembler
+
+### Editor — one raw take in, a finished video out
+For a talking-head recording or an ad take that already exists.
+Handles: transcription, silence/repetition/false-start cleanup, captions
+(Arabic RTL shaping, word highlighting), motion graphics, B-roll planning,
+behind-subject graphic placement where available, brand styling, QA, and
+final render. Run with `videoedit edit <video>`.
+
+### Creator — a script or idea in, a finished video out
+For when you don't have footage yet, just an idea or written script.
+Handles: script parsing, scene planning, analysis, storyboard, asset plan,
+MasterTimeline, motion treatment, render, QA. Run with
+`videoedit create <script>`.
+
+### Assembler — many existing clips in, one film out
+For a folder of scenes you've already shot. Handles: scene discovery, order
+preservation, a fast rough cut, continuity planning, real transitions, audio
+crossfade, loudness normalization, and finish/resume. Run with
+`videoedit assemble <scenes_dir> --rough` then `--finish`.
+
+## Key features
+
+- **Editing intelligence** — transcript-driven editing, silence/repetition/
+  false-start handling, an inspectable EDL, re-renderable edit decisions
+  (change a decision, re-render — no need to redo the whole pipeline), and
+  a persistent `project.md` memory of what the agent decided and why.
+- **Arabic** — RTL captions, Arabic shaping, karaoke-style word highlighting,
+  Egyptian/Gulf/Saudi/MSA preservation, mixed Arabic/English text, and no
+  hidden dialect conversion, ever.
+- **Motion** — a built-in simple motion engine that always works offline,
+  optional Remotion rendering, automatic motion-engine fallback, behind-
+  subject compositing status reporting, and brand-aware styling.
+- **B-roll** — planning with provider fallback, a fully offline path, and
+  optional cloud enhancement (Gemini image/video) when keys are set.
+- **Creator pipeline** — script → analysis → scenes → storyboard → asset
+  plan → timeline → render.
+- **Assembler pipeline** — rough cut → finish, preserving scene order, with
+  continuity planning, real transitions, audio crossfade, and loudness
+  normalization.
+- **Brand Profiles** — reusable colors, fonts, and caption presets per brand,
+  no source changes needed to add one.
+- **Inspectability** — every stage is a plain file you can open:
+  `project.md`, transcript, EDL, MasterTimeline, motion/B-roll/QA plans, and
+  the final video.
+
+## Arabic-first, dialect-preserving
+
+- The agent transcribes exactly what was said — Egyptian, Gulf, Saudi, MSA,
+  or code-switched Arabic/English — and never rewrites, formalizes, "fixes,"
+  or converts the dialect. Source audio has final authority
+  (`language/dialect_guard.py`).
+- **This is independent of what language you talk to the agent in.** If you
+  write to Claude Code in Arabic, onboarding/status/questions/explanations
+  come back in natural Arabic; if you write in English, they come back in
+  English. Either way, the video's transcript and captions stay exactly as
+  spoken — the agent never translates or "cleans up" the dialect just
+  because you happened to ask in a different language.
+- Arabic captions render RTL with correct shaping, support karaoke-style
+  word highlighting, and can mix Arabic/English text on the same line.
+
+## Offline vs. Cloud
+
+| | Works with zero API keys | What it adds when configured |
+|---|---|---|
+| Transcription | Yes — local Faster-Whisper | `GEMINI_API_KEY` / `ELEVENLABS_API_KEY` unlock cloud transcription |
+| Captions, RTL shaping, karaoke highlight | Yes, fully local | — |
+| Editing (silence/repetition/false-start, EDL) | Yes, fully local | — |
+| Motion graphics | Yes — built-in simple engine | Remotion (needs Node/npm, still no API key) for richer motion |
+| B-roll | Local library/planning fallback | Gemini image/video generation for AI-generated B-roll |
+| Visual QA | Basic local checks | Gemini vision for richer QA |
+| Brand Profiles, EDL, render, Assembler rough/finish | Yes, fully local | — |
+
+No API key is ever required for the core pipeline to complete. Keys are read
+only from `GEMINI_API_KEY` / `ELEVENLABS_API_KEY` environment variables —
+never written to a config file, logged, or printed by any command.
+
+## Install with Claude Code
 
 1. Clone or install this repo into your Claude Code skills directory.
 2. Open (or restart) Claude Code.
@@ -43,22 +115,42 @@ Claude bootstraps everything for you: detects your OS and a compatible
 Python (prefers 3.11), builds a private runtime this project owns
 (`.runtime/venv` — never your global/system Python), installs the offline
 profile, checks `ffmpeg`/`ffprobe` and Node/npm, and reports readiness in
-plain language. It never installs OS-level software silently — if
-`ffmpeg` is missing it gives you the exact command for your OS
-(`winget`/`choco`/`scoop` on Windows, Homebrew on macOS, your distro's
-package manager on Linux) and waits for you to run it. No API key is ever
-required or stored.
-
-Once it reports ready, just talk to it naturally:
-
-- "عدل الفيديو ده" → Editor
-- "اعمل فيديو من السكربت ده" → Creator
-- "اجمع المشاهد دي في فيلم" → Assembler
+plain language (in whichever language you're talking to it in). It never
+installs OS-level software silently — if `ffmpeg` is missing it gives you
+the exact command for your OS (`winget`/`choco`/`scoop` on Windows,
+Homebrew on macOS, your distro's package manager on Linux) and waits for you
+to run it. No API key is ever required or stored.
 
 You never need to understand Python virtual environments, pip extras, or
 provider routing to use this path.
 
-### Option B — Technical CLI install (source, for power users)
+## First conversation examples
+
+Arabic:
+- `عدل الفيديو ده وخليه أسرع وأنضف`
+- `حط كابشن عربي وحافظ على اللهجة المصرية`
+- `اعمل فيديو من السكربت ده`
+- `اجمع المشاهد دي واعمل rough cut`
+- `طبّق البراند ده على الكابشن والموتشن`
+- `اشتغل Offline فقط`
+
+English:
+- "Edit this video and make it faster and cleaner"
+- "Add Arabic captions and keep the Egyptian dialect"
+- "Create a video from this script"
+- "Assemble these scenes into a rough cut"
+- "Apply this brand to the captions and motion"
+- "Work offline only"
+
+Once the setup reports ready, just talk to it:
+
+> ارفع فيديو، أو ابعت سكربت، أو حدّد فولدر المشاهد وقلّي عايز تعمل إيه.
+> *(Upload a video, send a script, or point me at a folder of scenes and
+> tell me what you want.)*
+
+## Technical CLI usage
+
+### Source install (power users)
 
 ```bash
 git clone https://github.com/eslmamin5-creator/video-edit-agent
@@ -106,7 +198,7 @@ functional setup.
 Run `videoedit doctor` any time to see the full capability matrix and the
 last `videoedit setup` run's summary.
 
-## Quickstart
+### Quickstart
 
 ```bash
 videoedit setup           # one-time bootstrap: private runtime + offline profile + capability check
@@ -118,7 +210,7 @@ Output lands in `my_take_edit/` (an `edit/` folder next to the source video):
 `final.mp4`, `transcript_unified.json`, `edl.json`, `captions.ass`, `project.md`,
 and QA/B-roll/motion plan JSON files.
 
-## Key commands
+### Commands
 
 | Command | Purpose |
 |---|---|
@@ -133,7 +225,7 @@ and QA/B-roll/motion plan JSON files.
 | `videoedit brand init / validate` | Create or validate a Brand Profile |
 | `videoedit project inspect <dir>` | Print a project's `project.md` memory |
 
-## Capability status (as of v0.2.1)
+## Capability status (as of v0.2.2)
 
 Honest per-capability status, using six categories:
 `VERIFIED LOCALLY` (a real, non-mocked local acceptance run passed),
@@ -162,6 +254,14 @@ acceptance evidence), `REQUIRES API KEY` (blocked until you set one). Run
 | Loudness normalization (Assembler) | VERIFIED LOCALLY | Conservative `loudnorm`-based normalization: only scenes that deviate from the target level are normalized, true digital silence is left untouched (avoids a known ffmpeg `loudnorm` NaN failure mode on pure silence), and every decision records whether normalization was required/applied and at what target. Acceptance test verifies no clipping in the final render (`tests/test_phase2_transitions_loudness.py`). |
 | J-Cut / L-Cut audio-lead/audio-trail edits | NOT IMPLEMENTED | Conceptual only — the Transition Director never proposes one. Intentionally deferred past v0.2.0; not a release blocker. |
 
+## Outputs / project artifacts
+
+Every stage of every pipeline is a plain, inspectable file next to your
+video/project — nothing is hidden inside opaque state:
+
+`project.md` (human-readable memory of decisions and why), `transcript_unified.json`,
+`edl.json`, `captions.ass`, motion/B-roll/QA plan JSON files, and `final.mp4`.
+
 ## Secrets
 
 `GEMINI_API_KEY` and `ELEVENLABS_API_KEY` are read from environment variables
@@ -178,6 +278,15 @@ videoedit brand init my_brand
 videoedit brand validate my_brand
 videoedit edit my_take.mp4 --brand my_brand
 ```
+
+## Known limitations
+
+- Arabic ASR on real spoken audio and Remotion motion rendering are not yet
+  verified against real acceptance runs in this environment (see the
+  capability table above).
+- J-Cut/L-Cut audio-lead edits are conceptual only, not implemented.
+- HyperFrames is not a real installable engine; the router always falls
+  back to a working motion engine and logs the fallback.
 
 ## Attribution
 
