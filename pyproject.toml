@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "video-edit-agent"
-version = "0.2.0"
+version = "0.2.1"
 description = "Arabic-first, provider-agnostic AI video editing agent (CLI: videoedit)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,12 +27,32 @@ local = ["faster-whisper>=1.0", "arabic-reshaper>=3.0", "python-bidi>=0.4"]
 gemini = ["google-genai>=0.3"]
 elevenlabs = ["elevenlabs>=1.0"]
 motion = ["manim>=0.18"]
-subject = ["mediapipe>=0.10", "opencv-python-headless>=4.9"]
+# mediapipe is pinned exactly, not range-bounded: fresh-install testing found
+# that 0.10.35 (still <1.0) has ALREADY dropped the legacy
+# mediapipe.solutions.selfie_segmentation API this project's adapter needs --
+# "mediapipe<1.0" alone is not a safe bound. 0.10.21 is the last version
+# verified (by direct import test) to still expose it.
+subject = ["mediapipe==0.10.21", "opencv-python-headless>=4.9"]
 dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.4", "mypy>=1.10"]
+# Recommended offline install profile (spec v0.2.1 installation UX): everything
+# needed for Editor/Creator/Assembler fully offline -- local transcription,
+# Arabic captions, behind-subject compositing, local motion. No cloud SDKs.
+#
+# manim is intentionally excluded here: it needs system Cairo/Pango libraries
+# that are frequently missing on fresh Linux/Windows installs (confirmed via
+# fresh-install testing -- pip wheel build fails with
+# "pangocairo >= 1.30.0 is required" when those system libs aren't present),
+# and it is never load-bearing -- local motion already works fully offline
+# via the built-in simple motion engine. Use the "motion" profile explicitly
+# to opt into manim once its system dependencies are installed.
+full-local = [
+  "faster-whisper>=1.0", "arabic-reshaper>=3.0", "python-bidi>=0.4",
+  "mediapipe==0.10.21", "opencv-python-headless>=4.9",
+]
 all = [
   "faster-whisper>=1.0", "arabic-reshaper>=3.0", "python-bidi>=0.4",
   "google-genai>=0.3", "elevenlabs>=1.0", "manim>=0.18",
-  "mediapipe>=0.10", "opencv-python-headless>=4.9",
+  "mediapipe==0.10.21", "opencv-python-headless>=4.9",
 ]
 
 [project.scripts]
