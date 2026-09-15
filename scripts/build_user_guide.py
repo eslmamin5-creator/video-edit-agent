@@ -132,7 +132,7 @@ def _escape_xml(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _render_inline(text: str, *, rtl: bool) -> str:
+def _render_inline(text: str, *, rtl: bool, arabic_font: str = "Helvetica") -> str:
     """Turn Markdown inline syntax into reportlab markup.
 
     Bidi reshaping (arabic_reshaper + get_display) has no notion of XML
@@ -141,13 +141,31 @@ def _render_inline(text: str, *, rtl: bool) -> str:
     the Arabic text and corrupts the markup. Instead we shape each plain
     text run and each tag's inner content independently, in logical order,
     before wrapping the tagged runs in their tags.
+
+    Code spans normally use the Courier built-in font, but Courier has no
+    Arabic glyphs -- an Arabic phrase written inside backticks (e.g. an
+    Arabic command example) would render as tofu boxes. When a code span's
+    own content contains Arabic, render it with the Arabic-capable font
+    instead of Courier.
     """
 
     def shape(segment: str) -> str:
         escaped = _escape_xml(segment)
-        if rtl and _has_arabic(escaped):
-            return _shape_arabic(escaped)
-        return escaped
+        if not _has_arabic(escaped):
+            return escaped
+        # reportlab always draws a Paragraph's text left-to-right internally
+        # -- `rtl` only controls paragraph *alignment*, not glyph selection
+        # or run order. So any Arabic run, whether the surrounding document
+        # is the AR guide or a quoted Arabic phrase inside the EN guide,
+        # needs the same treatment: arabic_reshaper picks correct
+        # initial/medial/final glyph joining forms, and get_display()
+        # reorders the run into the left-to-right visual order reportlab
+        # expects. Skipping this (as the EN path used to) leaves letters in
+        # their isolated forms, visually disconnected.
+        shaped = _shape_arabic(escaped)
+        if rtl:
+            return shaped
+        return f"<font face='{arabic_font}'>{shaped}</font>"
 
     text = _LINK_RE.sub(r"\1", text)  # PDF is not interactive; keep link text only
 
@@ -159,7 +177,9 @@ def _render_inline(text: str, *, rtl: bool) -> str:
         if m.group(1) is not None:
             parts.append(f"<b>{shape(m.group(1))}</b>")
         else:
-            parts.append(f"<font face='Courier'>{shape(m.group(2))}</font>")
+            code_text = m.group(2)
+            code_face = arabic_font if _has_arabic(code_text) else "Courier"
+            parts.append(f"<font face='{code_face}'>{shape(code_text)}</font>")
         pos = m.end()
     if pos < len(text):
         parts.append(shape(text[pos:]))
@@ -217,9 +237,19 @@ def parse_markdown(md_text: str) -> list[Block]:
 
         if stripped.startswith(("- ", "* ")):
             items = []
-            while i < n and lines[i].strip().startswith(("- ", "* ")):
-                items.append(lines[i].strip()[2:].strip())
-                i += 1
+            while i < n and lines[i].strip():
+                line_stripped = lines[i].strip()
+                if line_stripped.startswith(("- ", "* ")):
+                    items.append(line_stripped[2:].strip())
+                    i += 1
+                elif not line_stripped.startswith(("#", ">", "|", "```")):
+                    # Wrapped continuation line of the previous bullet (source
+                    # Markdown wraps long bullets across lines without
+                    # repeating "- ") -- join it instead of ending the list.
+                    items[-1] = f"{items[-1]} {line_stripped}"
+                    i += 1
+                else:
+                    break
             blocks.append(BulletList(items))
             continue
 
@@ -273,10 +303,17 @@ def render_pdf(blocks: list[Block], output_path: Path, *, rtl: bool, title: str)
     base_font = "Helvetica"
     bold_font = "Helvetica-Bold"
     align = TA_RIGHT if rtl else TA_LEFT
+    margin = 2 * cm
+    content_width = A4[0] - 2 * margin
+
+    # Registered unconditionally: even the English (rtl=False) document's own
+    # Markdown source can quote a literal Arabic phrase (e.g. an example
+    # prompt), and Helvetica has no Arabic glyphs for it to fall back on.
+    font_path = _ensure_arabic_font()
+    pdfmetrics.registerFont(TTFont("ArabicBody", str(font_path)))
+    arabic_font = "ArabicBody"
 
     if rtl:
-        font_path = _ensure_arabic_font()
-        pdfmetrics.registerFont(TTFont("ArabicBody", str(font_path)))
         base_font = "ArabicBody"
         bold_font = "ArabicBody"  # variable-weight TTF; bold handled via markup weight fallback
 
@@ -309,18 +346,18 @@ def render_pdf(blocks: list[Block], output_path: Path, *, rtl: bool, title: str)
     story = []
     for block in blocks:
         if isinstance(block, Heading):
-            text = _render_inline(block.text, rtl=rtl)
+            text = _render_inline(block.text, rtl=rtl, arabic_font=arabic_font)
             style = h1 if block.level == 1 else h2
             story.append(RLParagraph(text, style))
         elif isinstance(block, Paragraph):
-            text = _render_inline(block.text, rtl=rtl)
+            text = _render_inline(block.text, rtl=rtl, arabic_font=arabic_font)
             story.append(RLParagraph(text, body))
         elif isinstance(block, Quote):
-            text = _render_inline(block.text, rtl=rtl)
+            text = _render_inline(block.text, rtl=rtl, arabic_font=arabic_font)
             story.append(RLParagraph(text, quote))
         elif isinstance(block, BulletList):
             for item in block.items:
-                text = _render_inline(item, rtl=rtl)
+                text = _render_inline(item, rtl=rtl, arabic_font=arabic_font)
                 marker = "• " if not rtl else " •"
                 text = f"{marker}{text}" if not rtl else f"{text}{marker}"
                 story.append(RLParagraph(text, bullet))
@@ -329,21 +366,54 @@ def render_pdf(blocks: list[Block], output_path: Path, *, rtl: bool, title: str)
             story.append(Preformatted("\n".join(block.lines), styles["Code"]))
             story.append(Spacer(1, 8))
         elif isinstance(block, Table):
-            header = [maybe_shape(c) for c in block.header]
-            rows = [[maybe_shape(c) for c in r] for r in block.rows]
-            data = [header] + rows
-            tbl = RLTable(data, hAlign="RIGHT" if rtl else "LEFT", repeatRows=1)
+            # Column widths are weighted by content length and forced to sum
+            # to the page's content width -- without this, reportlab sizes
+            # columns to each cell's natural (unwrapped) width, and a long
+            # column (e.g. "What cloud adds") silently renders wider than
+            # the page instead of wrapping, clipping off the page edge.
+            # Weights are computed from the raw (pre-markup) cell text so
+            # inserted XML tags don't skew the proportions.
+            col_count = len(block.header)
+            weights = [
+                max([len(block.header[c])] + [len(r[c]) for r in block.rows]) or 1
+                for c in range(col_count)
+            ]
+            total_weight = sum(weights) or col_count
+            col_widths = [content_width * w / total_weight for w in weights]
+
+            # Cell text may contain raw Markdown (backticks, literal `<`/`>`
+            # from a CLI usage string) -- render it the same way paragraph
+            # text is rendered (XML-escape + inline markup + Arabic shaping)
+            # rather than passing it to Paragraph unescaped.
+            header = [_render_inline(c, rtl=rtl, arabic_font=arabic_font) for c in block.header]
+            rows = [
+                [_render_inline(c, rtl=rtl, arabic_font=arabic_font) for c in r]
+                for r in block.rows
+            ]
+
+            header_cell_style = ParagraphStyle(
+                "TableHeaderCell", parent=body, fontName=base_font, fontSize=8.5,
+                leading=11, textColor=colors.white, alignment=align, spaceAfter=0,
+            )
+            body_cell_style = ParagraphStyle(
+                "TableBodyCell", parent=body, fontName=base_font, fontSize=8.5,
+                leading=11, alignment=align, spaceAfter=0,
+            )
+            data = [[RLParagraph(c, header_cell_style) for c in header]]
+            data += [[RLParagraph(c, body_cell_style) for c in row] for row in rows]
+
+            tbl = RLTable(data, colWidths=col_widths, hAlign="RIGHT" if rtl else "LEFT", repeatRows=1)
             tbl.setStyle(
                 TableStyle(
                     [
-                        ("FONTNAME", (0, 0), (-1, -1), base_font),
-                        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
                         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a3c5e")),
-                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
                         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f8fb")]),
                         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                        ("ALIGN", (0, 0), (-1, -1), "RIGHT" if rtl else "LEFT"),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                        ("TOPPADDING", (0, 0), (-1, -1), 3),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
                     ]
                 )
             )
@@ -352,14 +422,15 @@ def render_pdf(blocks: list[Block], output_path: Path, *, rtl: bool, title: str)
 
     def _footer(canvas, doc):
         canvas.saveState()
-        canvas.setFont("Helvetica", 8)
+        canvas.setFont(base_font, 8)
         canvas.setFillColor(colors.grey)
-        canvas.drawCentredString(A4[0] / 2, 1.2 * cm, f"video-edit-agent — {title} — {doc.page}")
+        footer_text = maybe_shape(f"video-edit-agent — {title} — {doc.page}")
+        canvas.drawCentredString(A4[0] / 2, 1.2 * cm, footer_text)
         canvas.restoreState()
 
     doc = BaseDocTemplate(
         str(output_path), pagesize=A4,
-        leftMargin=2 * cm, rightMargin=2 * cm, topMargin=2 * cm, bottomMargin=2 * cm,
+        leftMargin=margin, rightMargin=margin, topMargin=margin, bottomMargin=margin,
         title=title,
     )
     frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="body")
