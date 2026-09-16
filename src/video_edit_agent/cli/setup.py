@@ -13,6 +13,7 @@ routing to get to a working install.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import typer
@@ -21,8 +22,41 @@ from rich.console import Console
 from video_edit_agent.bootstrap.dependencies import DEFAULT_PROFILE, known_profiles
 from video_edit_agent.bootstrap.setup import run_check, run_setup
 from video_edit_agent.cli.doctor import print_doctor_report
+from video_edit_agent.core.env_file import find_project_env_file, write_env_values
 
 console = Console()
+
+_PROVIDER_PROMPTS = (
+    ("GEMINI_API_KEY", "Gemini API key"),
+    ("ELEVENLABS_API_KEY", "ElevenLabs API key"),
+)
+
+
+def _maybe_configure_cloud_providers(project_root: Path) -> None:
+    """Optional interactive prompt (spec section 26 addendum): lets a normal
+    user save GEMINI_API_KEY / ELEVENLABS_API_KEY to a local `.env` instead
+    of learning OS environment variables. Skipped entirely outside a real
+    terminal so it never blocks CI or a piped invocation. Entered values are
+    never echoed back or logged."""
+    if not sys.stdin.isatty():
+        return
+
+    if not typer.confirm("\nConfigure optional cloud providers?", default=False):
+        return
+
+    values: dict[str, str] = {}
+    for env_name, label in _PROVIDER_PROMPTS:
+        entered = typer.prompt(f"{label} (blank to skip)", default="", show_default=False, hide_input=True)
+        if entered.strip():
+            values[env_name] = entered.strip()
+
+    if not values:
+        console.print("No keys entered; nothing saved.")
+        return
+
+    env_path = find_project_env_file(project_root) or (project_root / ".env")
+    write_env_values(env_path, values)
+    console.print(f"Saved {len(values)} key(s) to {env_path} (never printed).")
 
 app = typer.Typer(help="Bootstrap the private runtime and check environment readiness.")
 
@@ -66,10 +100,13 @@ def main(
     console.print(f"node/npm: {outcome.node.detail}")
 
     console.print(
-        "\nCloud providers (Gemini, ElevenLabs) are entirely optional and only used if you set "
-        "GEMINI_API_KEY / ELEVENLABS_API_KEY as environment variables. Zero API keys is a fully "
-        "supported setup."
+        "\nCloud providers (Gemini, ElevenLabs) are entirely optional. Zero API keys is a fully "
+        "supported setup. Set GEMINI_API_KEY / ELEVENLABS_API_KEY as OS environment variables, or "
+        "save them to a local .env (this setup can do that for you below)."
     )
+
+    if not check:
+        _maybe_configure_cloud_providers(project_root)
 
     console.print("\nFinal capability check:\n")
     runtime_python = getattr(outcome.runtime, "python_path", None)

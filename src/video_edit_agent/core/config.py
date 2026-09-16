@@ -13,6 +13,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
+from video_edit_agent.core.env_file import resolve_secret
+
 USER_CONFIG_DIR = Path(os.environ.get("VIDEOEDIT_HOME", Path.home() / ".videoedit"))
 USER_CONFIG_PATH = USER_CONFIG_DIR / "config.yaml"
 
@@ -105,12 +107,14 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 # --------------------------------------------------------------------------
 # Secrets (spec section 26) — read-only accessors, never persisted anywhere.
+# OS/process env wins; project-local `.env` (see core.env_file) is only a
+# fallback. Neither of these ever mutates os.environ or logs a value.
 # --------------------------------------------------------------------------
 
 
 def get_gemini_key() -> str | None:
-    return os.environ.get("GEMINI_API_KEY") or None
+    return resolve_secret("GEMINI_API_KEY")
 
 
 def get_elevenlabs_key() -> str | None:
-    return os.environ.get("ELEVENLABS_API_KEY") or None
+    return resolve_secret("ELEVENLABS_API_KEY")
