@@ -1,7 +1,12 @@
 # video-edit-agent
 
-**Talk to it in plain language — Arabic or English — and it turns raw
-footage, a script, or a folder of scenes into a finished, captioned video.**
+**video-edit-agent is an AI video editing and production agent inside Claude
+Code.** Talk to it in plain language — Arabic or English:
+
+- Have raw footage? It edits it.
+- Have a script? It turns it into a video.
+- Have finished scenes? It assembles them into a film.
+
 Fully offline if you want it, enhanced by cloud providers if you give it API
 keys. CLI command: `videoedit`.
 
@@ -12,12 +17,44 @@ keys. CLI command: `videoedit`.
 
 ---
 
-## What can video-edit-agent do?
+## Start here
 
-Open Claude Code, install/open `video-edit-agent`, talk naturally, and get a
-video — you don't need to read technical docs or memorize CLI commands
-first. There are three workflows, and you say what you want in your own
-words; the agent figures out which one to run:
+**Step 1.** Open Claude Code locally.
+
+**Step 2.** Give Claude the repo and ask it to install/set it up:
+
+```text
+Install and set up:
+https://github.com/eslmamin5-creator/video-edit-agent
+
+Use the recommended setup from the repository.
+Tell me if any system-level tool is missing before installing it.
+```
+
+Claude bootstraps everything: detects your OS and a compatible Python,
+builds a private runtime this project owns, installs the offline profile,
+checks `ffmpeg`/Node, and reports readiness in whichever language you're
+talking to it in. No API key is ever required or stored. See
+[Install with Claude Code](#install-with-claude-code) below for the full
+detail.
+
+**Step 3.** Once setup reports ready, just ask naturally — no CLI commands
+needed for this path:
+
+Arabic:
+- `عدل الفيديو ده`
+- `اعمل فيديو من السكربت ده`
+- `اجمع المشاهد دي`
+
+English:
+- "Edit this video"
+- "Create a video from this script"
+- "Assemble these scenes"
+
+## Which workflow do I need?
+
+You don't need to pick — describe what you have, and the agent routes your
+request to the right one:
 
 | You have... | You say (example) | It runs |
 |---|---|---|
@@ -27,6 +64,43 @@ words; the agent figures out which one to run:
 
 If what you want is genuinely ambiguous, the agent asks one short
 clarifying question instead of guessing.
+
+## What happens after I ask?
+
+**Editor** (raw footage in):
+1. You give Claude the video.
+2. It checks that local tools are ready.
+3. It transcribes the speech.
+4. It cleans obvious silence/repetition/false starts.
+5. It prepares captions and visual treatment.
+6. It plans motion/B-roll where useful.
+7. It renders the video.
+8. It checks the result and gives you the final files.
+
+**Creator** (script in):
+1. You give a script or idea.
+2. The agent understands its structure.
+3. It splits the idea into scenes.
+4. It builds a storyboard and asset plan.
+5. It produces a timeline and motion treatment.
+6. It renders and checks the result.
+
+**Assembler** (scenes in):
+1. You give a folder of scenes.
+2. The agent discovers the scenes.
+3. It preserves (or follows your requested) order.
+4. It makes a rough cut.
+5. You can review/adjust.
+6. It finishes transitions/audio.
+7. It delivers the final film.
+
+## What do I receive?
+
+You get the final video, plus the files that explain what the agent
+changed, so you can review the decisions or continue the project later:
+captions/transcript where applicable, and editable, re-renderable edit
+decisions. See [Outputs / project artifacts](#outputs--project-artifacts)
+for exactly what those files are.
 
 ## Editor / Creator / Assembler
 
@@ -48,6 +122,73 @@ For a folder of scenes you've already shot. Handles: scene discovery, order
 preservation, a fast rough cut, continuity planning, real transitions, audio
 crossfade, loudness normalization, and finish/resume. Run with
 `videoedit assemble <scenes_dir> --rough` then `--finish`.
+
+## Asking for changes, in your own words
+
+The conversation doesn't stop at the first result — keep talking to it:
+
+Arabic:
+- `شيل الجملة دي`
+- `خلي الفيديو أسرع`
+- `الكابشن كبير زيادة`
+- `حافظ على اللهجة المصرية زي ما هي`
+- `خلي المشهد ده أقصر`
+- `اشتغل من غير Cloud`
+
+English:
+- "Remove this line"
+- "Make the video faster"
+- "The captions are too big"
+- "Keep the Egyptian dialect as it is"
+- "Make this scene shorter"
+- "Work without cloud"
+
+Because every stage is a re-renderable, inspectable decision (not a baked
+video you'd have to redo from scratch), the agent can apply a change and
+re-render just the affected part.
+
+## Arabic-first, dialect-preserving
+
+Talking to it in Arabic is a product benefit, not just technical RTL
+handling:
+
+- You talk to Claude in Arabic and get Arabic back — naturally, not
+  translated from an English template.
+- Captions display correctly: RTL, properly shaped, karaoke-style word
+  highlighting, and mixed Arabic/English on the same line.
+- Egyptian, Gulf, Saudi, and MSA dialects are preserved exactly as spoken —
+  the agent never silently turns dialect into formal Arabic.
+- **Interaction language never forces transcript translation.** If you talk
+  to Claude in Arabic about an English-language video, the video's own
+  transcript and captions stay in English; the agent's explanations to you
+  are in Arabic. Either direction, your source audio is never rewritten
+  just because of the language you used to ask.
+
+The mechanics behind this (RTL shaping, glyph joining, dialect-guard logic)
+are detailed in the [User Guide](docs/USER_GUIDE.md) for anyone who wants
+them.
+
+## Troubleshooting, in plain language
+
+**"الكابشن مكتوب غلط" / "The caption text is wrong"**
+Tell Claude the correct word and ask it to update the caption.
+
+**"الفيديو طويل" / "The video is too long"**
+Ask it to shorten the video or remove a specific part.
+
+**"عايز Offline فقط" / "I want offline only"**
+Tell it: "Work offline only" / `اشتغل Offline فقط`.
+
+**"أداة ناقصة" / "A system tool is missing"**
+Claude tells you exactly which system-level tool (like `ffmpeg`) is
+missing and asks before installing or changing anything on your system —
+it never installs OS-level software silently.
+
+**"الشغل وقف" / "The work stopped partway"**
+Ask Claude to inspect the project state and continue from the saved
+project. Every stage is a plain file it can re-read, so it can pick up
+supported workflows without starting over — though not every interruption
+is guaranteed to resume cleanly; ask it to check first.
 
 ## Key features
 
@@ -74,22 +215,10 @@ crossfade, loudness normalization, and finish/resume. Run with
   `project.md`, transcript, EDL, MasterTimeline, motion/B-roll/QA plans, and
   the final video.
 
-## Arabic-first, dialect-preserving
-
-- The agent transcribes exactly what was said — Egyptian, Gulf, Saudi, MSA,
-  or code-switched Arabic/English — and never rewrites, formalizes, "fixes,"
-  or converts the dialect. Source audio has final authority
-  (`language/dialect_guard.py`).
-- **This is independent of what language you talk to the agent in.** If you
-  write to Claude Code in Arabic, onboarding/status/questions/explanations
-  come back in natural Arabic; if you write in English, they come back in
-  English. Either way, the video's transcript and captions stay exactly as
-  spoken — the agent never translates or "cleans up" the dialect just
-  because you happened to ask in a different language.
-- Arabic captions render RTL with correct shaping, support karaoke-style
-  word highlighting, and can mix Arabic/English text on the same line.
-
 ## Offline vs. Cloud
+
+**You can use the core workflows — Editor, Creator, and Assembler — with
+zero API keys.** Cloud providers only add optional enhancements on top:
 
 | | Works with zero API keys | What it adds when configured |
 |---|---|---|
@@ -287,6 +416,9 @@ videoedit edit my_take.mp4 --brand my_brand
 - J-Cut/L-Cut audio-lead edits are conceptual only, not implemented.
 - HyperFrames is not a real installable engine; the router always falls
   back to a working motion engine and logs the fallback.
+- Resuming after an interruption is supported for Assembler's
+  rough → finish flow; other workflows do not yet guarantee a clean resume
+  from every interruption point.
 
 ## Attribution
 
