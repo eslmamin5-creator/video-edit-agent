@@ -21,6 +21,10 @@ build/
 # tracked -- see src/video_edit_agent/bootstrap/)
 .runtime/
 
+# Downloaded build-time font cache for scripts/build_user_guide.py
+# (never committed -- see _ensure_arabic_font() docstring)
+.fonts_cache/
+
 # Node / Remotion
 node_modules/
 npm-debug.log*

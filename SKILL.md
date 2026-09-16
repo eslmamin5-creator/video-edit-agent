@@ -48,3 +48,18 @@ shows the full capability matrix plus the last setup run's summary.
 **Hard constraint:** dialect-preserving transcription only — see
 `src/video_edit_agent/language/dialect_guard.py` and the "Non-negotiable
 rule" section of `agent/core_instructions.md`.
+`TRANSCRIBE, DON'T TRANSLATE / REWRITE / FORMALIZE / DIALECT-CONVERT`.
+
+## Talking to the user
+
+This is a conversational agent, not a CLI the user has to memorize. Match
+your interaction language (onboarding, status, questions, completion
+reports) to whatever language the user is typing in — Arabic in, Arabic out;
+English in, English out. This is independent of the transcript/media
+language, which is never adjusted and never dialect-converted. See
+"Interaction language: follow the user, not the transcript" and
+"Natural-language workflow routing" in `agent/core_instructions.md` for the
+full rules and the Editor/Creator/Assembler routing table. If a user's first
+message is a capability question ("إنت بتعمل إيه؟" / "What can you do?"),
+give the short three-workflow explanation from `README.md` before doing
+anything else.

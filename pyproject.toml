@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "video-edit-agent"
-version = "0.2.1"
+version = "0.2.2"
 description = "Arabic-first, provider-agnostic AI video editing agent (CLI: videoedit)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,7 +33,24 @@ motion = ["manim>=0.18"]
 # "mediapipe<1.0" alone is not a safe bound. 0.10.21 is the last version
 # verified (by direct import test) to still expose it.
 subject = ["mediapipe==0.10.21", "opencv-python-headless>=4.9"]
-dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.4", "mypy>=1.10"]
+# arabic-reshaper/python-bidi (not reportlab) are included here because
+# tests/test_arabic_ux_onboarding.py::test_inline_shaping_never_corrupts_reportlab_tags_with_mixed_arabic_code
+# unit-tests scripts/build_user_guide.py::_shape_arabic/_render_inline
+# directly (no importorskip guard, unlike the full PDF-build smoke test).
+# reportlab is deliberately left out of "dev": adding it would let the CI
+# test env satisfy test_build_user_guide_produces_both_pdfs's importorskip
+# guards and run the actual PDF build, which downloads an Arabic font over
+# the network on first run -- installing the full "docs" extra in CI/dev is
+# what we're avoiding here, not just picking a smaller extra name.
+dev = [
+  "pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.4", "mypy>=1.10",
+  "arabic-reshaper>=3.0", "python-bidi>=0.4",
+]
+# Documentation tooling only -- never imported by the runtime pipeline.
+# Used solely by scripts/build_user_guide.py to render docs/USER_GUIDE*.md
+# into the PDF user guides. arabic-reshaper/python-bidi are already runtime
+# deps under "local"/"full-local" and are reused here for Arabic PDF shaping.
+docs = ["reportlab>=4.0", "markdown>=3.5", "arabic-reshaper>=3.0", "python-bidi>=0.4"]
 # Recommended offline install profile (spec v0.2.1 installation UX): everything
 # needed for Editor/Creator/Assembler fully offline -- local transcription,
 # Arabic captions, behind-subject compositing, local motion. No cloud SDKs.
