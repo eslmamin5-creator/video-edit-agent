@@ -5,8 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from conftest import requires_ffmpeg
-
+from tests.conftest import requires_ffmpeg
 from video_edit_agent.captions.engine import write_captions
 from video_edit_agent.captions.styles import PRESETS
 from video_edit_agent.core.media import probe
