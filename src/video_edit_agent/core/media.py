@@ -72,6 +72,20 @@ def probe(path: Path) -> MediaInfo:
     )
 
 
+def probe_duration(path: Path) -> float:
+    """Returns a media file's duration in seconds via ffprobe. Unlike
+    `probe()`, this does not require a video stream, so it also works on
+    audio-only files (e.g. an extracted transcription wav)."""
+    result = run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-print_format", "json", str(path)],
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise MediaError(f"ffprobe failed for {path}: {result.stderr.strip()}")
+    data = json.loads(result.stdout)
+    return float(data.get("format", {}).get("duration", 0.0) or 0.0)
+
+
 def content_hash(path: Path, chunk_size: int = 1 << 20) -> str:
     """Cheap content-based hash for caching (spec section 34): file size +
     sampled chunks, not a full read of large video files."""

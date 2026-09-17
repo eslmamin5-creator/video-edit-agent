@@ -37,7 +37,7 @@ def build_providers(cfg: TranscriptionConfig, gemini_model: str) -> dict[str, Tr
 
 
 class TranscriptionRouter:
-    def __init__(self, cfg: TranscriptionConfig, *, offline: bool, gemini_model: str = "gemini-3.5-transcribe"):
+    def __init__(self, cfg: TranscriptionConfig, *, offline: bool, gemini_model: str = "gemini-3.5-flash"):
         self.cfg = cfg
         self.offline = offline
         self.providers = build_providers(cfg, gemini_model)

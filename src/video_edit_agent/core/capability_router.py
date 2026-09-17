@@ -78,13 +78,32 @@ def detect_gemini_key() -> Capability:
     key = get_gemini_key()
     if not key:
         return Capability("gemini_key", False, "missing GEMINI_API_KEY", verified=None)
+    if not _pymodule("google.genai"):
+        # A key alone doesn't make the provider usable -- e.g. the
+        # "full-local" profile deliberately excludes the "gemini" extra, so
+        # a key saved via `videoedit setup`'s prompt can exist with no SDK
+        # installed in this interpreter. Reporting available=True here would
+        # be a false-ready state that only surfaces later as a runtime
+        # transcription failure.
+        return Capability(
+            "gemini_key", False,
+            "API key set but google-genai not installed (pip install video-edit-agent[gemini])",
+            verified=None,
+        )
     verified, verified_detail = is_verified("gemini_live")
     return Capability("gemini_key", True, f"API key detected; live {verified_detail}", verified=verified)
 
 
 def detect_elevenlabs_key() -> Capability:
     key = get_elevenlabs_key()
-    return Capability("elevenlabs_key", key is not None, "set" if key else "missing ELEVENLABS_API_KEY")
+    if not key:
+        return Capability("elevenlabs_key", False, "missing ELEVENLABS_API_KEY")
+    if not _pymodule("elevenlabs"):
+        return Capability(
+            "elevenlabs_key", False,
+            "API key set but elevenlabs not installed (pip install video-edit-agent[elevenlabs])",
+        )
+    return Capability("elevenlabs_key", True, "set")
 
 
 def detect_hyperframes() -> Capability:

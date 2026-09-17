@@ -19,7 +19,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from video_edit_agent.bootstrap.dependencies import DEFAULT_PROFILE, known_profiles
+from video_edit_agent.bootstrap.dependencies import DEFAULT_PROFILE, install_extras, known_profiles
 from video_edit_agent.bootstrap.setup import run_check, run_setup
 from video_edit_agent.cli.doctor import print_doctor_report
 from video_edit_agent.core.env_file import find_project_env_file, write_env_values
@@ -27,17 +27,26 @@ from video_edit_agent.core.env_file import find_project_env_file, write_env_valu
 console = Console()
 
 _PROVIDER_PROMPTS = (
-    ("GEMINI_API_KEY", "Gemini API key"),
-    ("ELEVENLABS_API_KEY", "ElevenLabs API key"),
+    ("GEMINI_API_KEY", "Gemini API key", "gemini"),
+    ("ELEVENLABS_API_KEY", "ElevenLabs API key", "elevenlabs"),
 )
 
 
-def _maybe_configure_cloud_providers(project_root: Path) -> None:
+def _maybe_configure_cloud_providers(project_root: Path, runtime_python: str | None) -> None:
     """Optional interactive prompt (spec section 26 addendum): lets a normal
     user save GEMINI_API_KEY / ELEVENLABS_API_KEY to a local `.env` instead
     of learning OS environment variables. Skipped entirely outside a real
     terminal so it never blocks CI or a piped invocation. Entered values are
-    never echoed back or logged."""
+    never echoed back or logged.
+
+    A key alone doesn't make a cloud provider usable: profiles like
+    "full-local" deliberately don't install the "gemini"/"elevenlabs" SDKs
+    (spec: offline-only), so entering a key here would otherwise leave the
+    provider silently unusable despite `doctor` later reporting a key is
+    set. When `runtime_python` (the private runtime's own interpreter) is
+    available, this installs the extra for each key just entered, so the
+    provider is truly ready immediately -- not a separate manual pip step.
+    """
     if not sys.stdin.isatty():
         return
 
@@ -45,10 +54,12 @@ def _maybe_configure_cloud_providers(project_root: Path) -> None:
         return
 
     values: dict[str, str] = {}
-    for env_name, label in _PROVIDER_PROMPTS:
+    extras_needed: list[str] = []
+    for env_name, label, extra in _PROVIDER_PROMPTS:
         entered = typer.prompt(f"{label} (blank to skip)", default="", show_default=False, hide_input=True)
         if entered.strip():
             values[env_name] = entered.strip()
+            extras_needed.append(extra)
 
     if not values:
         console.print("No keys entered; nothing saved.")
@@ -57,6 +68,20 @@ def _maybe_configure_cloud_providers(project_root: Path) -> None:
     env_path = find_project_env_file(project_root) or (project_root / ".env")
     write_env_values(env_path, values)
     console.print(f"Saved {len(values)} key(s) to {env_path} (never printed).")
+
+    if runtime_python is None:
+        console.print(
+            "[yellow]Could not locate the private runtime to install the matching SDK(s) "
+            "automatically; re-run `videoedit setup` to finish provider setup.[/yellow]"
+        )
+        return
+
+    console.print(f"Installing SDK(s) for: {', '.join(extras_needed)} ...")
+    result = install_extras(project_root, runtime_python, tuple(extras_needed))
+    if result.ok:
+        console.print("[green]SDK(s) installed.[/green]")
+    else:
+        console.print(f"[yellow]SDK install failed: {result.detail}[/yellow]")
 
 app = typer.Typer(help="Bootstrap the private runtime and check environment readiness.")
 
@@ -105,11 +130,12 @@ def main(
         "save them to a local .env (this setup can do that for you below)."
     )
 
+    runtime_python = getattr(outcome.runtime, "python_path", None)
+
     if not check:
-        _maybe_configure_cloud_providers(project_root)
+        _maybe_configure_cloud_providers(project_root, runtime_python)
 
     console.print("\nFinal capability check:\n")
-    runtime_python = getattr(outcome.runtime, "python_path", None)
     if runtime_python is not None:
         # Query the private runtime's own interpreter, not this process's --
         # package-presence checks (faster-whisper, mediapipe, ...) only see

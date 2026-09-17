@@ -40,7 +40,7 @@ class CloudConfig(BaseModel):
 
 
 class GeminiConfig(BaseModel):
-    transcription_model: str = "gemini-3.5-transcribe"
+    transcription_model: str = "gemini-3.5-flash"
     vision_model: str = "gemini-3.5-flash"
 
 

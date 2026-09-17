@@ -51,6 +51,42 @@ class InstallResult:
     detail: str = ""
 
 
+def install_extras(
+    project_root: Path,
+    python_executable: str,
+    extras: tuple[str, ...],
+    editable: bool = True,
+    timeout: float = 900.0,
+) -> InstallResult:
+    """Installs specific pyproject extras (e.g. `("gemini",)`) into the given
+    interpreter, independent of the named install profiles above.
+
+    Needed because a profile's own extras (e.g. "full-local", which is
+    deliberately offline-only and excludes "gemini"/"elevenlabs") may not
+    cover a cloud provider the user configures an API key for *after* the
+    profile was installed -- without this, a key saved via `videoedit
+    setup`'s prompt would exist with no SDK installed, and the provider
+    would silently never actually be usable despite `doctor` seeing a key.
+    """
+    if not extras:
+        return InstallResult(True, "extras", str(project_root), "nothing to install")
+    spec = f"{project_root}[{','.join(extras)}]"
+    cmd = [python_executable, "-m", "pip", "install"]
+    if editable:
+        cmd.append("-e")
+    cmd.append(spec)
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return InstallResult(False, "extras", spec, f"pip invocation failed: {exc}")
+
+    if proc.returncode != 0:
+        return InstallResult(False, "extras", spec, proc.stderr.strip()[-2000:])
+
+    return InstallResult(True, "extras", spec, "installed")
+
+
 def install_profile(
     project_root: Path,
     python_executable: str,
