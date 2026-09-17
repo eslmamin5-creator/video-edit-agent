@@ -1,0 +1,131 @@
+<!doctype html>
+<html
+  lang="en"
+  data-composition-variables='[
+    {"id":"title","type":"string","label":"Title","default":"Title"},
+    {"id":"subtitle","type":"string","label":"Subtitle","default":""},
+    {"id":"value","type":"string","label":"Value","default":""},
+    {"id":"layout","type":"enum","label":"Layout","default":"title","options":[{"value":"title","label":"Title"},{"value":"lower_third","label":"Lower Third"},{"value":"stat","label":"Stat"}]},
+    {"id":"accent","type":"color","label":"Accent","default":"#f6c945"},
+    {"id":"duration","type":"number","label":"Duration (s)","default":3,"min":0.5,"max":30,"step":0.1}
+  ]'
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>video-edit-agent motion overlay</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+        color: white;
+        font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      .clip {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+      }
+      #root[data-layout="lower_third"] .clip {
+        place-items: end start;
+        padding: 0 0 90px 90px;
+      }
+      .title-block h1 {
+        margin: 0;
+        font-size: 96px;
+        font-weight: 800;
+        text-align: center;
+        text-shadow: 0 4px 24px rgba(0, 0, 0, 0.55);
+      }
+      .title-block p {
+        margin: 16px 0 0;
+        font-size: 40px;
+        text-align: center;
+        opacity: 0.85;
+      }
+      .lower-third-block {
+        background: rgba(10, 12, 16, 0.72);
+        border-left: 8px solid var(--accent);
+        padding: 24px 40px;
+        border-radius: 6px;
+        max-width: 70%;
+      }
+      .lower-third-block h1 {
+        margin: 0;
+        font-size: 52px;
+        font-weight: 700;
+      }
+      .lower-third-block p {
+        margin: 8px 0 0;
+        font-size: 30px;
+        opacity: 0.85;
+      }
+      .stat-block {
+        text-align: center;
+      }
+      .stat-block .value {
+        font-size: 140px;
+        font-weight: 800;
+        color: var(--accent);
+      }
+      .stat-block .label {
+        margin-top: 12px;
+        font-size: 40px;
+        opacity: 0.85;
+      }
+      #root:not([data-layout="title"]) .title-block,
+      #root:not([data-layout="lower_third"]) .lower-third-block,
+      #root:not([data-layout="stat"]) .stat-block {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-width="1920" data-height="1080">
+      <section id="scene" class="clip" data-start="0" data-duration="3">
+        <div class="title-block">
+          <h1 id="title-text" data-var-text="title">Title</h1>
+          <p id="title-subtext" data-var-text="subtitle"></p>
+        </div>
+        <div class="lower-third-block">
+          <h1 id="lt-text" data-var-text="title">Title</h1>
+          <p id="lt-subtext" data-var-text="subtitle"></p>
+        </div>
+        <div class="stat-block">
+          <div class="value" id="stat-value" data-var-text="value">0</div>
+          <div class="label" id="stat-label" data-var-text="title">Label</div>
+        </div>
+      </section>
+    </div>
+    <script>
+      const vars = window.__hyperframes.getVariables();
+      const root = document.getElementById("root");
+      const scene = document.getElementById("scene");
+      const duration = Math.max(0.5, Number(vars.duration) || 3);
+      const layout = vars.layout || "title";
+
+      root.dataset.layout = layout;
+      root.setAttribute("data-duration", String(duration));
+      scene.setAttribute("data-duration", String(duration));
+
+      const activeInner = scene.querySelector(
+        layout === "lower_third" ? ".lower-third-block" : layout === "stat" ? ".stat-block" : ".title-block"
+      );
+
+      const tl = gsap.timeline({ paused: true });
+      const holdEnd = Math.max(0.6, duration - 0.4);
+      tl.fromTo(activeInner, { y: 40, opacity: 0 }, { y: 0, opacity: 1, duration: 0.5, ease: "power3.out" }, 0.15);
+      tl.to(activeInner, { opacity: 0, duration: 0.3, ease: "power1.in" }, holdEnd);
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

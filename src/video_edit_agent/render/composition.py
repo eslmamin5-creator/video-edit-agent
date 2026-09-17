@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from video_edit_agent.core.schemas import EDL, TransitionType
+from video_edit_agent.editorial.punch_in import ZOOM_ANCHOR_Y
 from video_edit_agent.render.color import safe_format_filter
 
 
@@ -42,11 +43,18 @@ class Overlay:
     y: str = "(H-h)/2"
     behind_subject: bool = False  # reserved for spec section 16 layering
     scale_to_canvas: bool = False  # scale+crop this overlay to cover the full canvas (Creator B-roll of arbitrary aspect ratio)
+    scale_width: int | None = None  # scale this overlay to a fixed pixel width, aspect-preserved (brand logo watermark)
 
 
 @dataclass
 class CaptionBurn:
     ass_path: Path
+    # Directory containing a brand-specific font file (e.g. `brands/<name>/
+    # fonts/`) so libass can find it without a system-wide font install
+    # (Review-First Editing Workflow spec section 9/10: "no silent
+    # system-wide installs"). None means "use whatever's already on the
+    # system's font path" -- today's existing behavior, unchanged.
+    fonts_dir: Path | None = None
 
 
 @dataclass
@@ -88,7 +96,14 @@ def build_filter_complex(plan: RenderPlan) -> tuple[list[str], str, str]:
         )
         if speed != 1.0:
             vf += f",setpts={1 / speed:.6f}*PTS"
-        vf += f",{fmt}[{v_label}]"
+        vf += f",{fmt}"
+        if clip.zoom and clip.zoom != 1.0:
+            crop_w = round(edl.width / clip.zoom / 2) * 2
+            crop_h = round(edl.height / clip.zoom / 2) * 2
+            crop_x = (edl.width - crop_w) // 2
+            crop_y = round((edl.height - crop_h) * ZOOM_ANCHOR_Y)
+            vf += f",crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale={edl.width}:{edl.height}:flags=lanczos,setsar=1"
+        vf += f"[{v_label}]"
         filters.append(vf)
 
         af = (
@@ -169,6 +184,15 @@ def build_filter_complex(plan: RenderPlan) -> tuple[list[str], str, str]:
     video_out = "vconcat"
     overlay_idx_offset = len(input_index_by_file)
     for j, ov in enumerate(plan.overlays):
+        # A plain `-i file.webm` silently drops the alpha plane and decodes
+        # as opaque yuv420p (see hyperframes/adapter.py's render() docstring
+        # for the empirical finding with VP9 webm) -- the only webm overlay
+        # producer in this pipeline is motion/remotion/adapter.py, which is
+        # explicitly pinned to `--codec=vp8 --pixel-format=yuva420p`, so the
+        # matching VP8 alpha decoder is forced here. Without it the overlay
+        # composites as an opaque black rectangle hiding everything beneath.
+        if str(ov.path).lower().endswith(".webm"):
+            inputs += ["-c:v", "libvpx"]
         inputs += ["-i", str(ov.path)]
         ov_input = overlay_idx_offset + j
         ov_label = f"{ov_input}:v"
@@ -179,6 +203,10 @@ def build_filter_complex(plan: RenderPlan) -> tuple[list[str], str, str]:
                 f"crop={edl.width}:{edl.height}[{scaled_label}]"
             )
             ov_label = scaled_label
+        elif ov.scale_width is not None:
+            scaled_label = f"ovscaled{j}"
+            filters.append(f"[{ov_input}:v]scale={ov.scale_width}:-1[{scaled_label}]")
+            ov_label = scaled_label
         new_label = f"vov{j}"
         enable = f"between(t,{ov.start:.3f},{ov.end:.3f})"
         filters.append(
@@ -188,7 +216,11 @@ def build_filter_complex(plan: RenderPlan) -> tuple[list[str], str, str]:
 
     if plan.captions is not None:
         ass_escaped = str(plan.captions.ass_path).replace("\\", "/").replace(":", "\\:")
-        filters.append(f"[{video_out}]subtitles='{ass_escaped}'[vout]")
+        subtitles_filter = f"subtitles='{ass_escaped}'"
+        if plan.captions.fonts_dir is not None:
+            fontsdir_escaped = str(plan.captions.fonts_dir).replace("\\", "/").replace(":", "\\:")
+            subtitles_filter += f":fontsdir='{fontsdir_escaped}'"
+        filters.append(f"[{video_out}]{subtitles_filter}[vout]")
         video_out = "vout"
     else:
         filters.append(f"[{video_out}]null[vout]")

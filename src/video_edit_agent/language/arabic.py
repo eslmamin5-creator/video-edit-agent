@@ -48,10 +48,19 @@ def dialect_marker_hits(text: str) -> dict[str, int]:
 
 
 def shape_for_display(text: str) -> str:
-    """Apply Arabic letter shaping + BiDi reordering for rendering into
-    caption images/subtitles (spec section 15). Requires arabic-reshaper and
-    python-bidi; degrades to plain text if unavailable rather than failing
-    the whole render."""
+    """Apply Arabic letter shaping + BiDi reordering for consumers that do
+    NOT have their own complex-text-layout engine (e.g. reportlab PDF
+    generation in `scripts/build_user_guide.py`). Requires arabic-reshaper
+    and python-bidi; degrades to plain text if unavailable rather than
+    failing the whole render.
+
+    Do NOT use this for the ASS/SRT caption engine (`captions/engine.py`):
+    this project's ffmpeg/libass build is compiled with HarfBuzz + FriBidi
+    and performs its own shaping + BiDi reordering on raw logical-order
+    text. Pre-shaping caption text with this function before handing it to
+    libass double-processes it and garbles the rendered glyphs (see
+    `captions/rtl.py` for the full explanation and empirical verification).
+    """
     if not is_arabic_text(text) and not has_code_switch(text):
         return text
     try:

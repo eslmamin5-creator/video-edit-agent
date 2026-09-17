@@ -54,5 +54,10 @@ def resolve_style(name: str, brand_overrides: dict | None = None) -> CaptionStyl
         overrides.setdefault("font_ar", font)
         overrides.setdefault("font_en", font)
     data = base.__dict__.copy()
-    data.update({k: v for k, v in overrides.items() if k in data})
+    # A brand.yaml override of `null` means "use the preset default", not
+    # "set this field to Python None" -- the latter serializes into the ASS
+    # header as the literal text "None", an invalid ASS color that makes
+    # libass silently fail to draw the glyph (while the separately-valid
+    # BackColour box still renders), leaving captions invisible.
+    data.update({k: v for k, v in overrides.items() if k in data and v is not None})
     return CaptionStyle(**data)

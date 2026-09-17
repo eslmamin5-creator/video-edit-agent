@@ -3,9 +3,9 @@ simple image animations. Uses PIL only — always available, the guaranteed
 fallback engine per spec section 43 (no engine may ever hard-fail a render).
 
 Colors are brand-aware (Creator spec section 9): when a `Brand` is supplied
-its `colors`/`fonts` are used; the defaults below match `brand.defaults.DEFAULT_BRAND`
-exactly, so existing Editor callers that don't pass a brand (or pass the
-default brand) see pixel-identical output to before this was added.
+its `colors`/`fonts` are used. When no brand is supplied at all, this falls
+back to a neutral white accent rather than an invented strong color (Review-
+First Editing Workflow spec section 3 -- no arbitrary default yellow).
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from video_edit_agent.core.schemas import AnimationKind, AnimationSpec
 
 DEFAULT_CANVAS = (1080, 1920)
 
-_DEFAULT_ACCENT = (255, 204, 0, 255)
+_DEFAULT_ACCENT = (255, 255, 255, 255)
 _DEFAULT_TEXT = (255, 255, 255, 255)
 _DEFAULT_BG = (0, 0, 0, 160)
 _DEFAULT_SUBTEXT = (200, 200, 200, 255)
@@ -40,7 +40,10 @@ class _Palette:
             self.bg = _DEFAULT_BG
             self.font_candidates = ()
         else:
-            self.accent = _hex_to_rgba(brand.colors.accent)
+            # No arbitrary yellow fallback (Review-First Editing Workflow spec
+            # section 3): a brand without an explicit accent uses its own
+            # secondary color as a neutral fallback instead of inventing one.
+            self.accent = _hex_to_rgba(brand.colors.accent or brand.colors.secondary)
             self.text = _hex_to_rgba(brand.colors.secondary)
             self.subtext = _hex_to_rgba(brand.colors.secondary, alpha=200)
             self.bg = _hex_to_rgba(brand.colors.primary, alpha=160)

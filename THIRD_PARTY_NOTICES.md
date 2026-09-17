@@ -27,9 +27,10 @@ furnished to do so, subject to the following conditions: ...
 
 **What was inspected:** the repository's Claude Code skill layout (`SKILL.md`,
 numbered pipeline scripts `00_setup.sh` .. `13_assets.py`), its cut-plan /
-caption / behind-text / Remotion-render / safe-zone-check workflow, and its
+caption / behind-text / Remotion-render / safe-zone-check workflow, its
 Remotion template component layout (`Ad.tsx`, `Captions.tsx`, `Chrome.tsx`,
-`Guides.tsx`, `Outro.tsx`, `Scenes.tsx`, `theme.ts`).
+`Guides.tsx`, `Outro.tsx`, `Scenes.tsx`, `theme.ts`), and `scripts/03_cut_zoom.py`
+(the per-segment talking-head punch-in/zoom-cycling render script).
 
 **Adapted (architectural inspiration, rewritten in this project's own code):**
 - The general idea of a numbered, resumable editing pipeline (media -> cut
@@ -39,6 +40,23 @@ Remotion template component layout (`Ad.tsx`, `Captions.tsx`, `Chrome.tsx`,
   `subject/compositor.py`.
 - The Remotion-based render approach informed `motion/remotion/` and the
   reusable component list in `motion/remotion/components/`.
+
+**Ported (Baseline Recovery Milestone item 6, talking-head punch-ins):**
+- `scripts/03_cut_zoom.py`'s per-segment zoom-level cycling lists (`Z` for its
+  default pace, and its `CALM`-mode `Z` list) and its vertical crop anchor
+  (`ANCH=0.30`) are ported near-verbatim into `editorial/punch_in.py`'s
+  `ZOOM_LEVELS_NORMAL` / `ZOOM_LEVELS_CALM` / `ZOOM_ANCHOR_Y`, and its
+  per-segment `crop=cw:ch:x:y,scale=...:flags=lanczos` filter pattern is
+  ported into `render/composition.py::build_filter_complex`'s per-clip video
+  filter chain (applied when `EDLClip.zoom != 1.0`). The reference script's
+  `theme.json`-driven `"pace":"calm"` switch has no equivalent config file in
+  this project, so `plan_punch_ins()` keys the calm variant off this
+  project's own `Brand.motion.energy == "low"` field instead -- the closest
+  existing concept in the Brand Profile system (spec section 23). The
+  reference's `MINHOLD`/`held` "don't change zoom before 4s on the same shot"
+  timer was not ported: this project's EDL clips are already discrete kept
+  takes (one per cut), so every clip boundary is already a legitimate point
+  to vary the zoom, unlike the reference's raw sub-segment loop.
 
 **Explicitly NOT carried over (per spec §46):**
 - Any implicit uppercase-Latin caption styling assumptions.
@@ -93,7 +111,55 @@ bundled `skills/manim-video` skill.
 
 ---
 
-## 3. Third-Party Python Dependencies
+## 3. heygen-com/hyperframes
+
+Repository: https://github.com/heygen-com/hyperframes
+License: Apache License 2.0
+
+Due-diligence note: an unrelated PyPI package also named `hyperframes` exists
+(a pandas-like N-dimensional DataFrame library, unrelated author, no
+rendering API). It was deliberately never installed or referenced. The real
+`heygen-com/hyperframes` project is a Bun/Node monorepo; its only stable,
+install-free integration surface is its published npm CLI, invoked here as
+`npx hyperframes@0.8.46` (version pinned for deterministic renders --
+`motion/hyperframes/adapter.py`'s module docstring has the full trail).
+
+**What was inspected:** `skills/hyperframes-core/SKILL.md` and its
+`references/minimal-composition.md` and `references/variables-and-media.md`
+(the real HTML/CSS/JS composition contract: `data-composition-id`,
+`data-composition-variables`, `data-var-text`/`data-var-src`, a single paused
+`gsap.timeline` registered on `window.__timelines`), plus
+`skills/embedded-captions/scripts/render-and-composite.sh` (the project's own
+reference ffmpeg compositing invocation, which is what revealed that its
+WebM/VP9 alpha output only decodes correctly when the input is forced to the
+`libvpx-vp9` decoder -- informing this project's choice of MOV/ProRes output
+instead, see below).
+
+**Classification: WRAPPED.** No HyperFrames source code is vendored or
+copied. This project ships one small, independently hand-authored HTML/CSS/
+JS composition (`src/video_edit_agent/motion/hyperframes/template/`) built
+from the contract documented above, and `motion/hyperframes/adapter.py`
+shells out to the real, unmodified, published `hyperframes` npm CLI via
+`npx` to render it -- mirroring the existing `motion/remotion/adapter.py`
+pattern (per-project npm cache isolation, pinned version, offline/cached-only
+guard for fast unit tests). The CLI is fetched at render time via `npx`, the
+same way a normal `npm install` dependency would be, and is not
+redistributed with this repository.
+
+**Independently discovered (not documented upstream, verified empirically in
+this project):** HyperFrames' WebM/VP9 renders report `needsAlpha:true` and
+an `ALPHA_MODE` container tag, but decode as opaque `yuv420p` unless the
+consuming ffmpeg command forces `-c:v libvpx-vp9` on that specific input --
+otherwise the alpha plane is silently dropped. Rendering to `--format mov`
+instead produces `yuva444p12le` (ProRes) output that composites correctly
+through a plain `-i file.mov` with no special flags, which is what this
+project's `render/composition.py` overlay filter graph does -- so the
+adapter renders MOV, not WebM, despite WebM being HyperFrames' more commonly
+documented output format.
+
+---
+
+## 4. Third-Party Python Dependencies
 
 The following is a regular pip dependency of this project (declared in
 `pyproject.toml`, installed from PyPI at install/setup time) -- it is not

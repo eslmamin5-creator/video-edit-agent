@@ -71,7 +71,7 @@ def _brand_extra(brand: Brand | None) -> dict:
     return {
         "primaryColor": brand.colors.primary,
         "secondaryColor": brand.colors.secondary,
-        "accentColor": brand.colors.accent,
+        "accentColor": brand.colors.accent or brand.colors.secondary,
         "fontFamily": brand.fonts[0] if brand.fonts else None,
     }
 

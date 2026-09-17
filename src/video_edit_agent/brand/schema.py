@@ -28,7 +28,12 @@ class BrandMotion(BaseModel):
 class BrandColors(BaseModel):
     primary: str = "#111111"
     secondary: str = "#FFFFFF"
-    accent: str = "#FFCC00"
+    # No default accent color (Review-First Editing Workflow spec section 3):
+    # a brand that doesn't explicitly set an accent must not silently inherit
+    # a strong color like the old hardcoded "#FFCC00" yellow. `None` means
+    # "unset" -- consumers must fall back to a neutral color (usually
+    # `secondary`) and report that they did so, never invent a strong accent.
+    accent: str | None = None
 
 
 class BrandCTA(BaseModel):

@@ -16,8 +16,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from video_edit_agent.brand.schema import Brand
 from video_edit_agent.core.capability_router import detect_node, detect_npm
 from video_edit_agent.core.schemas import AnimationSpec
+
+_FALLBACK_FONT_FAMILY = "Arial, 'Segoe UI', sans-serif"
 
 _TEMPLATE_DIR = Path(__file__).parent / "template"
 
@@ -81,7 +84,31 @@ def _ensure_deps_installed(template_dest: Path, offline: bool = False) -> None:
         raise RemotionRenderError(f"npm install failed: {result.stderr[-2000:]}")
 
 
-def _props_for_spec(spec: AnimationSpec) -> dict:
+def _theme_props(brand: Brand | None) -> dict | None:
+    """Builds the `BrandTheme` prop shape (template/src/theme.ts) from a
+    Brand Profile. Returns None when no brand is available at all, letting
+    the template's own neutral `defaultTheme` apply.
+
+    Before this, `_props_for_spec` never emitted a `theme` key at all, so
+    every Remotion-rendered motion graphic (lower thirds, CTAs, stat
+    counters, ...) silently used `defaultTheme`'s hardcoded colors regardless
+    of the active Brand Profile -- one of the root causes of the "brand
+    colors not applied consistently" regression (Review-First Editing
+    Workflow spec section 3/11-B)."""
+    if brand is None:
+        return None
+    return {
+        "primary": brand.colors.primary,
+        "secondary": brand.colors.secondary,
+        # No arbitrary yellow fallback (spec section 3): fall back to the
+        # brand's own secondary color, never invent a strong accent.
+        "accent": brand.colors.accent or brand.colors.secondary,
+        "fontFamily": brand.fonts[0] if brand.fonts else _FALLBACK_FONT_FAMILY,
+        "rtl": brand.captions.rtl,
+    }
+
+
+def _props_for_spec(spec: AnimationSpec, brand: Brand | None = None) -> dict:
     """Map the generic AnimationSpec fields onto the props each Remotion
     composition expects (see Root.tsx defaultProps for the shape)."""
     base = {"text": spec.text, "name": spec.text, "title": spec.text, "metric": spec.text, "label": spec.text}
@@ -89,6 +116,9 @@ def _props_for_spec(spec: AnimationSpec) -> dict:
         base.update({"subtitle": spec.subtext, "description": spec.subtext, "attribution": spec.subtext})
     if spec.value is not None:
         base.update({"value": spec.value})
+    theme = _theme_props(brand)
+    if theme is not None:
+        base["theme"] = theme
     base.update(spec.extra)
     return base
 
@@ -100,6 +130,7 @@ def render(
     fps: int = 30,
     slot_id: str = "slot",
     offline: bool = False,
+    brand: Brand | None = None,
 ) -> Path:
     """Render a single AnimationSpec to a transparent WebM via Remotion.
 
@@ -120,7 +151,7 @@ def render(
     # relative (e.g. `videoedit edit sample.mp4` from the project dir) --
     # resolve to absolute paths before building the command.
     output_path = output_path.resolve()
-    props = _props_for_spec(spec)
+    props = _props_for_spec(spec, brand)
     props_path = (template_dest / f"_props_{slot_id}.json").resolve()
     props_path.write_text(json.dumps(props, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -141,6 +172,17 @@ def render(
         str(output_path),
         f"--props={props_path}",
         f"--duration-in-frames={duration_frames}",
+        # None of the template compositions paint a background, so the
+        # canvas is transparent -- but Remotion only preserves that in the
+        # exported file when explicitly told to encode alpha. Without these
+        # two flags it silently composites the transparent content onto an
+        # opaque black canvas at encode time (confirmed via ffprobe:
+        # codec_name=vp8, pix_fmt=yuv420p with no alpha plane at all), which
+        # then overlays as a full-canvas black rectangle hiding whatever is
+        # underneath -- not a downstream decode issue, since there is no
+        # alpha to decode in the first place.
+        "--codec=vp8",
+        "--pixel-format=yuva420p",
     ]
 
     try:

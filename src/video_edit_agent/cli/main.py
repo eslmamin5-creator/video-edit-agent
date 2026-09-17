@@ -31,6 +31,7 @@ from video_edit_agent.core.config import AppConfig
 from video_edit_agent.core.pipeline import run_pipeline
 from video_edit_agent.core.project import ProjectPaths
 from video_edit_agent.localization.interface import t
+from video_edit_agent.review import state as review_state
 
 app = typer.Typer(help="videoedit — Arabic-first, model-agnostic AI video editing agent.")
 app.add_typer(config_cli.app, name="config")
@@ -78,8 +79,17 @@ def edit(
     offline: bool = typer.Option(False, "--offline", help="Block all cloud calls; local-only pipeline."),
     no_broll: bool = typer.Option(False, "--no-broll"),
     no_motion: bool = typer.Option(False, "--no-motion"),
+    yes: bool = typer.Option(
+        False, "--yes", "--no-review",
+        help="Skip the review gate and render immediately (Review-First Editing Workflow bypass).",
+    ),
 ):
-    """Run the full editing pipeline on a single source video."""
+    """Run the full editing pipeline on a single source video.
+
+    By default this stops before the final render and writes review
+    artifacts (transcript, caption preview, brand summary, timeline, B-roll,
+    preview frames) under `edit/review/` for inspection -- pass `--yes` (or
+    `--no-review`) to skip straight to a full render instead."""
     lang = _lang()
     console.print(t("analyzing_video", lang))
 
@@ -110,7 +120,26 @@ def edit(
         enable_broll=not no_broll,
         enable_motion=not no_motion,
         on_progress=on_progress,
+        review=not yes,
     )
+
+    if not result.ready_for_final_render and result.review_dir is not None:
+        console.print("[bold]Review before render:[/bold] the pipeline stopped before the final render.")
+        console.print(f"Review artifacts: {result.review_dir}")
+        console.print(" - transcript_review.json  (caption/transcript text)")
+        console.print(" - caption_preview.json    (caption style)")
+        console.print(" - brand_summary.json      (brand colors/logo/CTA)")
+        console.print(" - timeline_review.json    (edit/cut/B-roll/motion plan)")
+        console.print(" - broll_review.json       (selected B-roll)")
+        console.print(" - contact_sheet.jpg / frames/  (representative preview frames)")
+        console.print(
+            f"Once you're satisfied, run [bold]videoedit review-approve {result.project_dir}[/bold] "
+            f"then re-run [bold]videoedit edit {video} --yes[/bold] to render, "
+            "or re-run this command with --yes to skip review entirely."
+        )
+        if result.warnings:
+            console.print(f"Warnings: {'; '.join(result.warnings)}")
+        return
 
     if result.final_output is None:
         console.print(t("error_generic", lang, message="; ".join(result.warnings) or "pipeline did not complete"))
@@ -121,6 +150,18 @@ def edit(
     console.print(f"Project files: {result.project_dir}")
     if result.qa_report and result.qa_report.issues:
         console.print(f"QA issues: {len(result.qa_report.issues)} (see project.md for detail)")
+
+
+@app.command(name="review-approve")
+def review_approve(
+    project_dir: Path = typer.Argument(..., exists=True, help="The edit/ project directory to approve."),
+):
+    """Flip the READY_FOR_FINAL_RENDER gate for a reviewed project (Review-
+    First Editing Workflow spec section 8). Re-run `videoedit edit ... --yes`
+    afterwards to actually render."""
+    review_dir = project_dir / "review" if project_dir.name != "review" else project_dir
+    state = review_state.approve(review_dir, note="approved via `videoedit review-approve`")
+    console.print(f"Approved. ready_for_final_render={state.ready_for_final_render}")
 
 
 @app.command()

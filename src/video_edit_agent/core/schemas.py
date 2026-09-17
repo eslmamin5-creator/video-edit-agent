@@ -108,6 +108,10 @@ class EDLClip(BaseModel):
     audio_fade_in_ms: int = 0
     audio_fade_out_ms: int = 0
     speed: float = 1.0
+    # Punch-in zoom factor for this clip (Baseline Recovery Milestone item 6,
+    # ported from `majedphotos/video-ad-editor`'s `scripts/03_cut_zoom.py`).
+    # 1.0 means no zoom. See `editorial/punch_in.py::plan_punch_ins`.
+    zoom: float = 1.0
     overlay_refs: list[str] = Field(default_factory=list)
     caption_refs: list[str] = Field(default_factory=list)
     broll_refs: list[str] = Field(default_factory=list)

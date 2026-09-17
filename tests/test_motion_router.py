@@ -4,6 +4,13 @@ must fall through to a working engine, the project must still complete, and
 the substitution must never be silent -- `MotionPlanItem.fallback_log` must
 record exactly which engines were tried and rejected before the one that
 actually produced output.
+
+These tests force `offline=True` so the HyperFrames adapter (which shells out
+to `npx hyperframes@<pinned>`, see `motion/hyperframes/adapter.py`) rejects
+immediately from its own offline/not-yet-cached guard instead of making a
+real network call -- keeping this a fast, deterministic unit test of the
+*fallback* behavior, not a real-render test (that lives in
+`scripts/hyperframes_acceptance.py`).
 """
 from __future__ import annotations
 
@@ -26,7 +33,9 @@ def test_hyperframes_request_falls_back_and_is_traceable(tmp_path: Path):
         engine_hint=MotionEngine.HYPERFRAMES,
     )
 
-    item = render_motion(spec, project_root=tmp_path, output_dir=tmp_path / "out", slot_id="fallback_test")
+    item = render_motion(
+        spec, project_root=tmp_path, output_dir=tmp_path / "out", slot_id="fallback_test", offline=True
+    )
 
     # The project must still complete -- some engine must have produced output.
     assert item.engine_used is not None
@@ -54,7 +63,9 @@ def test_engine_actually_used_matches_priority_after_hyperframes_removed(tmp_pat
         engine_hint=MotionEngine.HYPERFRAMES,
     )
 
-    item = render_motion(spec, project_root=tmp_path, output_dir=tmp_path / "out2", slot_id="fallback_test2")
+    item = render_motion(
+        spec, project_root=tmp_path, output_dir=tmp_path / "out2", slot_id="fallback_test2", offline=True
+    )
 
     assert item.engine_used == MotionEngine.SIMPLE
     assert item.fallback_log == [entry for entry in item.fallback_log if entry.startswith("hyperframes:")]

@@ -32,10 +32,14 @@ def validate_brand(brand: Brand) -> ValidationResult:
     for field_name, value in (
         ("colors.primary", brand.colors.primary),
         ("colors.secondary", brand.colors.secondary),
-        ("colors.accent", brand.colors.accent),
     ):
         if not _is_hex_color(value):
             errors.append(f"{field_name} is not a valid hex color: {value!r}")
+
+    # accent is optional (None means "not set" -- see brand/schema.py); only
+    # validate it when the brand actually provides one.
+    if brand.colors.accent is not None and not _is_hex_color(brand.colors.accent):
+        errors.append(f"colors.accent is not a valid hex color: {brand.colors.accent!r}")
 
     if brand.captions.preset not in CAPTION_PRESETS:
         warnings.append(f"captions.preset '{brand.captions.preset}' is not a known preset; will fall back to 'minimal'")

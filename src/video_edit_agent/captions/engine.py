@@ -16,7 +16,6 @@ from pathlib import Path
 from video_edit_agent.captions.chunking import CaptionChunk, chunk_words
 from video_edit_agent.captions.rtl import rtl_override_tags
 from video_edit_agent.captions.safe_zone import SafeZone, margins_px
-from video_edit_agent.captions.shaping import shape_line
 from video_edit_agent.captions.styles import CaptionStyle
 from video_edit_agent.captions.word_highlight import build_karaoke_text
 from video_edit_agent.core.schemas import EDL, Transcript, Word
@@ -102,7 +101,9 @@ def build_ass(
         if style.word_highlight:
             text = build_karaoke_text(chunk, style)
         else:
-            text = shape_line(chunk.text)
+            # Raw logical-order text: this project's libass build (HarfBuzz +
+            # FriBidi) shapes and reorders it itself -- see captions/rtl.py.
+            text = chunk.text
         text = rtl_override_tags(chunk.text) + text
         events.append(
             f"Dialogue: 0,{_fmt_ass_time(chunk.start)},{_fmt_ass_time(chunk.end)},Default,,0,0,0,,{text}"
@@ -118,7 +119,10 @@ def build_srt(transcript: Transcript, edl: EDL) -> str:
     for i, chunk in enumerate(chunks, start=1):
         lines.append(str(i))
         lines.append(f"{_fmt_srt_time(chunk.start)} --> {_fmt_srt_time(chunk.end)}")
-        lines.append(shape_line(chunk.text))
+        # Plain-text SRT sidecar: raw logical-order text. SRT has no shaping
+        # engine of its own -- players/editors that open it do their own
+        # Arabic shaping/BiDi, same as any other subtitle text they load.
+        lines.append(chunk.text)
         lines.append("")
     return "\n".join(lines)
 

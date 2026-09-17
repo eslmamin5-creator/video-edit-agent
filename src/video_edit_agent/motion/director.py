@@ -9,18 +9,35 @@ from __future__ import annotations
 
 import re
 
+from video_edit_agent.brand.schema import Brand
 from video_edit_agent.core.schemas import EDL, AnimationKind, AnimationSpec, Transcript
 
 _NUMBER_RE = re.compile(r"\b(\d[\d,]*\.?\d*%?)\b")
 _MIN_HOOK_GAP_S = 0.5
 _MAX_STAT_SLOTS = 3
+# Never let a generic English "Learn more" silently appear on non-English
+# content (Review-First Editing Workflow spec section 11 item D): a brand
+# without an explicit `cta.text_default` gets a neutral, language-appropriate
+# default instead. Still reviewable/correctable before render (spec section
+# 5's timeline review + section 2's caption review).
+_DEFAULT_CTA_TEXT_AR = "تواصل معنا"
+_DEFAULT_CTA_TEXT_EN = "Learn more"
 
 
 def _words_in_window(transcript: Transcript, start: float, end: float) -> list[str]:
     return [w.word for w in transcript.words if start <= w.start < end]
 
 
-def build_motion_plan(edl: EDL, transcript: Transcript) -> list[AnimationSpec]:
+def _resolve_cta_text(brand: Brand | None, transcript: Transcript) -> str:
+    if brand is not None and brand.cta.text_default:
+        return brand.cta.text_default
+    language = (transcript.language or "").lower()
+    if language.startswith("ar"):
+        return _DEFAULT_CTA_TEXT_AR
+    return _DEFAULT_CTA_TEXT_EN
+
+
+def build_motion_plan(edl: EDL, transcript: Transcript, brand: Brand | None = None) -> list[AnimationSpec]:
     """Propose a small, high-confidence set of motion graphic slots:
 
     - a `hook_title` in the opening seconds, using the first spoken clause
@@ -75,17 +92,29 @@ def build_motion_plan(edl: EDL, transcript: Transcript) -> list[AnimationSpec]:
                     timeline_end=min(clip.timeline_in + 3.0, clip.timeline_out),
                     value=match.group(1),
                     text=joined[:60],
+                    # Baseline Recovery Milestone item 7: a stat counter reads as
+                    # a big background statistic the speaker stands in front of
+                    # (documentary/social-video convention), unlike LOWER_THIRD/
+                    # CTA, which are clean foreground chyron/UI elements that
+                    # would look broken if partially occluded by the subject.
+                    behind_subject=True,
                 )
             )
             stat_slots += 1
 
     if total_duration > 6.0:
+        cta_text = _resolve_cta_text(brand, transcript)
         specs.append(
             AnimationSpec(
                 kind=AnimationKind.CTA,
                 timeline_start=max(0.0, total_duration - 3.0),
                 timeline_end=total_duration,
-                text="",
+                text=cta_text,
+                # The Remotion CTA composition's `actionLabel` prop falls back
+                # to a hardcoded "Learn more" defaultProp when absent (see
+                # motion/remotion/template/src/Root.tsx); setting it explicitly
+                # here is what actually prevents that silent English default.
+                extra={"actionLabel": cta_text},
             )
         )
 
