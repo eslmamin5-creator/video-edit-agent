@@ -140,7 +140,7 @@ def test_wrapping_never_changes_timing_and_caps_at_two_lines():
     style = CaptionStyle(name="t", word_highlight=True, line_break_chars=18)
     text = build_karaoke_text(chunk, style, break_before=balanced_break_index(words, 18))
     assert text.count("\\N") == 1  # a two-line cap
-    durations = [int(m) for m in re.findall(r"\\k(\d+)", text)]
+    durations = [int(m) for m in re.findall(r"\\kf(\d+)", text)]
     assert durations == [round((w.end - w.start) * 100) for w in words]  # per-word timing untouched
 
 
@@ -159,7 +159,7 @@ def test_karaoke_durations_track_word_timing_in_the_ass_dialogue():
     ass = build_ass(tr, edl, style)
     fields = [ln.split(",", 9) for ln in ass.splitlines() if ln.startswith("Dialogue:")]
     assert fields[0][1] == "0:00:01.00" and fields[-1][2] == "0:00:05.00"  # first word in / last word out
-    ks = [int(m) for f in fields for m in re.findall(r"\\k(\d+)", f[9])]
+    ks = [int(m) for f in fields for m in re.findall(r"\\kf(\d+)", f[9])]
     assert ks == [round((w.end - w.start) * 100) for w in seg.words]  # one sweep per word, real durations
     assert sum(f[9].count("\\kf") for f in fields) == 4  # sweep highlight per word
 
