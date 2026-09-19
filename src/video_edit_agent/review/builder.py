@@ -6,10 +6,12 @@ a pure, cheap transform of data the pipeline already computed (spec section
 from __future__ import annotations
 
 from video_edit_agent.brand.schema import Brand
+from video_edit_agent.broll.prompt import build_broll_prompt
 from video_edit_agent.captions.styles import CaptionStyle
 from video_edit_agent.core.schemas import (
     EDL,
     BrollPlanItem,
+    BrollSourceKind,
     MotionPlanItem,
     Transcript,
 )
@@ -262,17 +264,27 @@ def build_timeline_review(
 
 
 def build_broll_review(broll_plan: list[BrollPlanItem]) -> BrollReview:
-    items = [
-        BrollReviewItem(
-            timeline_start=item.timeline_start,
-            timeline_end=item.timeline_end,
-            spoken_context=item.spoken_concept,
-            source=item.source.value if hasattr(item.source, "value") else str(item.source),
-            asset_path=item.asset_path,
-            prompt=item.prompt,
-            confidence=item.confidence,
-            quality_gate_passed=None if item.asset_path is None else True,
+    items = []
+    for item in sorted(broll_plan, key=lambda b: b.timeline_start):
+        source = item.source.value if hasattr(item.source, "value") else str(item.source)
+        items.append(
+            BrollReviewItem(
+                timeline_start=item.timeline_start,
+                timeline_end=item.timeline_end,
+                spoken_context=item.spoken_concept,
+                recommended_visual=item.recommended_visual,
+                source=source,
+                source_recommendation=(
+                    "no local/user asset found; on approval generate one (Gemini image, then Veo) "
+                    "or supply your own clip"
+                    if item.source == BrollSourceKind.NONE
+                    else f"use existing asset ({source})"
+                ),
+                asset_path=item.asset_path,
+                prompt=item.prompt,
+                draft_prompt=build_broll_prompt(item),
+                confidence=item.confidence,
+                quality_gate_passed=None if item.asset_path is None else True,
+            )
         )
-        for item in broll_plan
-    ]
     return BrollReview(items=items)

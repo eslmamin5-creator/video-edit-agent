@@ -98,8 +98,32 @@ def extract_frame(plan: RenderPlan, timestamp_s: float, output_path: Path) -> Pa
     return output_path
 
 
+def annotate_planned_treatment(frame_path: Path, text: str) -> None:
+    """Stamps a "planned, not rendered" banner onto a preview frame. Used in
+    review mode, where motion graphics are not rendered before approval, so a
+    motion frame would otherwise look identical to a plain talking-head frame.
+    Best-effort: a missing Pillow install leaves the frame untouched."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return
+    with Image.open(frame_path) as opened:
+        img = opened.convert("RGB")
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.load_default(size=max(18, img.width // 32))
+    _, top, _, bottom = draw.textbbox((0, 0), text, font=font)
+    pad = 10
+    y = img.height - (bottom - top) - 3 * pad
+    draw.rectangle([0, y - pad, img.width, y + (bottom - top) + pad], fill=(0, 0, 0))
+    draw.text((pad, y - top), text, fill=(255, 220, 0), font=font)
+    img.save(frame_path, quality=90)
+
+
 def generate_preview_frames(
-    plan: RenderPlan, timestamps: dict[str, float], out_dir: Path
+    plan: RenderPlan,
+    timestamps: dict[str, float],
+    out_dir: Path,
+    planned_labels: dict[str, str] | None = None,
 ) -> PreviewFrameSet:
     """Generates one frame per label in `timestamps`. Only the affected
     labels need to be regenerated when the user requests a change (spec
@@ -109,6 +133,8 @@ def generate_preview_frames(
     for label, t in timestamps.items():
         frame_path = out_dir / f"frame_{label}.jpg"
         extract_frame(plan, t, frame_path)
+        if planned_labels and label in planned_labels:
+            annotate_planned_treatment(frame_path, planned_labels[label])
         frames.append(PreviewFrame(label=label, timeline_at=t, image_path=str(frame_path)))
     return PreviewFrameSet(frames=frames)
 

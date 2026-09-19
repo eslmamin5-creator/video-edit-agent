@@ -131,9 +131,16 @@ class BrollReviewItem(BaseModel):
     timeline_start: float
     timeline_end: float
     spoken_context: str
+    recommended_visual: str = ""
     source: str
+    # What approval would do for this slot ("none" means nothing is resolved
+    # yet; generation only happens after approval, never during review).
+    source_recommendation: str = ""
     asset_path: str | None = None
     prompt: str | None = None
+    # The exact prompt a generation provider would receive, shown so the user
+    # can correct it before any generation is paid for.
+    draft_prompt: str | None = None
     confidence: float = 0.0
     quality_gate_passed: bool | None = None
 

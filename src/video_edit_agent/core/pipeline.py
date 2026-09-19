@@ -84,6 +84,26 @@ class PipelineResult:
     review_dir: Path | None = None
 
 
+def _planned_motion_labels(motion_items: list[MotionPlanItem], timestamps: dict[str, float]) -> dict[str, str]:
+    """Maps each motion-derived preview label to a human-readable "planned"
+    banner, using the same kind -> label rules as `pick_representative_timestamps`."""
+    labels: dict[str, str] = {}
+    for m in motion_items:
+        kind = m.spec.kind.value
+        label = (
+            "cta" if kind == "cta"
+            else "logo" if kind == "logo_reveal"
+            else "behind_subject" if m.spec.behind_subject
+            else "motion_graphic"
+        )
+        if label in timestamps and label not in labels:
+            behind = " | behind subject" if m.spec.behind_subject else ""
+            labels[label] = (
+                f"PLANNED (not rendered): {kind} {m.spec.timeline_start:.1f}-{m.spec.timeline_end:.1f}s{behind}"
+            )
+    return labels
+
+
 def _brand_logo_overlay(logo_path: Path, brand: Brand, edl: EDL) -> Overlay:
     """Builds a persistent, top-right brand-logo watermark overlay (spec
     section 23; item 5 of the Baseline Recovery Milestone). Sized to 15% of
@@ -214,7 +234,7 @@ def run_pipeline(
         try:
             broll_items = plan_broll(
                 edl, transcript, paths.edit_dir / "broll_assets", paths.cache_dir / "broll_generated",
-                brand=brand, allow_generation=not offline,
+                brand=brand, allow_generation=not offline and not review,
             )
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"B-roll planning skipped: {exc}")
@@ -244,6 +264,11 @@ def run_pipeline(
 
         motion_output_dir = paths.cache_dir / "motion"
         for i, spec in enumerate(specs):
+            if review:
+                # Review-First: plan only. No motion or subject-cutout rendering
+                # happens before the user approves the plan.
+                motion_items.append(MotionPlanItem(spec=spec, engine_used=None, output_path=None))
+                continue
             item = render_motion(
                 spec, paths.root, motion_output_dir, brand=brand, fps=edl.fps, slot_id=f"motion{i}", offline=offline
             )
@@ -294,10 +319,11 @@ def run_pipeline(
 
         import json
 
-        paths.motion_plan.write_text(
-            json.dumps([item.model_dump(mode="json") for item in motion_items], ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        if not review:
+            paths.motion_plan.write_text(
+                json.dumps([item.model_dump(mode="json") for item in motion_items], ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
 
     # 7b. Brand logo watermark (spec section 23, Baseline Recovery Milestone
     # item 5): drawn last so it sits on top of B-roll and motion graphics.
@@ -323,7 +349,7 @@ def run_pipeline(
         review_dir.mkdir(parents=True, exist_ok=True)
 
         cta_text = next(
-            (m.spec.text for m in motion_items if str(m.spec.kind).endswith("cta") and m.spec.text),
+            (m.spec.text for m in motion_items if m.spec.kind.value == "cta" and m.spec.text),
             brand.cta.text_default or "",
         )
         logo_present = logo_path is not None
@@ -351,7 +377,12 @@ def run_pipeline(
 
         try:
             timestamps = pick_representative_timestamps(edl, motion_items, broll_items, transcript)
-            frame_set = generate_preview_frames(plan, timestamps, review_dir / "frames")
+            # Motion is planned-only in review mode, so its frames get a
+            # "planned treatment" banner instead of a real Remotion render.
+            planned_labels = _planned_motion_labels(motion_items, timestamps)
+            frame_set = generate_preview_frames(
+                plan, timestamps, review_dir / "frames", planned_labels=planned_labels
+            )
             build_contact_sheet(frame_set, review_dir / "contact_sheet.jpg")
             (review_dir / "preview_frames.json").write_text(frame_set.model_dump_json(indent=2), encoding="utf-8")
         except Exception as exc:  # noqa: BLE001 - preview frames are a convenience, never a hard failure
