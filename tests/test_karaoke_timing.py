@@ -32,7 +32,7 @@ def _ass_events(words: list[Word], style: CaptionStyle = _STYLE) -> list[tuple[s
     edl = EDL(clips=[EDLClip(source_file="x.mp4", source_in=0.0, source_out=end, timeline_in=0.0,
                              timeline_out=end, caption_refs=["s0"])])
     ass = build_ass(Transcript(language="ar", segments=[seg], provider="test"), edl, style)
-    return [tuple(ln.split(",", 9)[1:3]) + (ln.split(",", 9)[9],) for ln in ass.splitlines() if ln.startswith("Dialogue:")]
+    return [tuple(ln.split(",", 9)[1:3]) + (ln.split(",", 9)[9],) for ln in ass.splitlines() if ln.startswith("Dialogue:") and ln.split(",", 4)[3] == "Default"]
 
 
 def _ts(stamp: str) -> float:

@@ -157,7 +157,7 @@ def test_karaoke_durations_track_word_timing_in_the_ass_dialogue():
     style = CaptionStyle(name="t", word_highlight=True, primary_color=hex_to_ass("#FFFFFF"),
                          highlight_color=hex_to_ass("#00AA33"))
     ass = build_ass(tr, edl, style)
-    fields = [ln.split(",", 9) for ln in ass.splitlines() if ln.startswith("Dialogue:")]
+    fields = [ln.split(",", 9) for ln in ass.splitlines() if ln.startswith("Dialogue:") and ln.split(",", 4)[3] == "Default"]
     assert fields[0][1] == "0:00:01.00" and fields[-1][2] == "0:00:05.00"  # first word in / last word out
     ks = [int(m) for f in fields for m in re.findall(r"\\kf(\d+)", f[9])]
     assert ks == [round((w.end - w.start) * 100) for w in seg.words]  # one sweep per word, real durations

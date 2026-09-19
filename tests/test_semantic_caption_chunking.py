@@ -166,7 +166,7 @@ def _ass_event_words(words: list[Word], max_chars: int) -> list[list[str]]:
     ass = build_ass(transcript, edl, CaptionStyle(name="t", word_highlight=True, max_chars_per_line=max_chars))
     events = []
     for line in ass.splitlines():
-        if not line.startswith("Dialogue:"):
+        if not line.startswith("Dialogue:") or line.split(",", 4)[3] != "Default":  # karaoke text events only
             continue
         text = line.split(",", 9)[9]  # Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
         text = re.sub(r"\{[^}]*\}", "", text).replace("\\N", " ")

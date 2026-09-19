@@ -81,6 +81,72 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 _BOX_BACKGROUNDS = ("box", "brand_box")
 
+# Background plate (see `plate_lines`). A karaoke line is several libass text
+# runs (one per `\kf` word), and libass draws BorderStyle=3 (opaque box) per run,
+# so neighbouring translucent boxes overlap in their padding and stack into
+# visible vertical tone bands. The plate is therefore its own set of events on
+# a lower layer, made of un-tagged text (one run per line -> one box), and the
+# karaoke text above it carries no box at all.
+_CLIP_RIGHT = 100000  # wider than any canvas: the clip only bounds the rows
+PLATE_STYLE = "Plate"
+_PLATE_LAYER, _TEXT_LAYER = 0, 1
+_TRANSPARENT = "&HFF000000"
+
+
+def uses_plate(style: CaptionStyle) -> bool:
+    """True when the caption backing must be drawn as a separate plate: a box
+    behind karaoke-tagged text (an un-tagged event is one run, so its own box
+    is already uniform)."""
+    return style.word_highlight and style.background in _BOX_BACKGROUNDS
+
+
+def _plate_style_line(style: CaptionStyle, margins: dict[str, int]) -> str:
+    """The plate's ASS style: same font, size and layout as the text style (so
+    libass gives it the text's exact bounds), glyphs fully transparent, and the
+    opaque-box border in the caption box colour with the box padding."""
+    return (
+        f"Style: {PLATE_STYLE},{style.font_ar},{style.font_size},{_TRANSPARENT},{_TRANSPARENT},"
+        f"{style.outline_color},{_TRANSPARENT},{-1 if style.bold else 0},0,0,0,100,100,0,0,3,{style.outline},0,2,"
+        f"{margins['left']},{margins['right']},{margins['bottom']},-1"
+    )
+
+
+def plate_lines(
+    line_texts: list[str],
+    chunk_text: str,
+    style: CaptionStyle,
+    *,
+    width: int,
+    height: int,
+    margins: dict[str, int],
+) -> list[str]:
+    """Event texts of the plate: one per visual line.
+
+    Each line is its own single-line, un-tagged, no-wrap event, so libass sizes
+    its box from the real rendered glyph run (any script, any bidi mix) and no
+    box can ever be split per word. Lines are placed with an explicit position
+    (libass would otherwise shift same-layer events apart to avoid a collision).
+    Adjacent lines' boxes would overlap by the padding and darken where they do,
+    so each line is clipped to its own band. That is exact because libass lays
+    lines out `font_size` apart (ascent + descent is normalised to the font
+    size) up from the bottom margin (bottom-centre alignment). Bands meet on an
+    integer row, so the plate is one uniform shape and only its outer top and
+    bottom edges carry the padding."""
+    n = len(line_texts)
+    pad = round(style.outline)
+    pitch = round(style.font_size)
+    x = (margins["left"] + width - margins["right"]) // 2
+    out = []
+    for i, line in enumerate(line_texts):
+        j = n - 1 - i  # position counted from the bottom line
+        bottom = height - margins["bottom"] - j * pitch
+        tags = f"\\q2\\an2\\pos({x},{bottom})"
+        if n > 1:
+            top = bottom - pitch - (pad if i == 0 else 0)
+            tags += f"\\clip(0,{top},{_CLIP_RIGHT},{bottom + (pad if j == 0 else 0)})"
+        out.append(f"{{{tags}}}{wrap_rtl(line, chunk_text)}")
+    return out
+
 
 def balanced_break_index(words: list, max_line_chars: int) -> int | None:
     """Index of the word that should start the second line when a chunk is
@@ -88,6 +154,14 @@ def balanced_break_index(words: list, max_line_chars: int) -> int | None:
     Phrase-aware (see `captions/phrasing.py`): it avoids splitting tightly
     connected phrases and falls back to a width-balanced split otherwise."""
     return phrase_break_index(words, max_line_chars)
+
+
+def chunk_line_texts(chunk: CaptionChunk, break_before: int | None) -> list[str]:
+    """The plain text of each visual line of a chunk (words in logical order)."""
+    words = [w.word for w in chunk.words]
+    if break_before is None:
+        return [" ".join(words)]
+    return [" ".join(words[:break_before]), " ".join(words[break_before:])]
 
 
 def caption_chunks(transcript: Transcript, edl: EDL, style: CaptionStyle) -> list[CaptionChunk]:
@@ -116,13 +190,19 @@ def build_ass(
         (style.highlight_color, style.primary_color) if style.word_highlight
         else (style.primary_color, style.highlight_color)
     )
+    plate = uses_plate(style)
     header = ASS_HEADER_TEMPLATE.format(
         width=edl.width, height=edl.height, font=style.font_ar, size=style.font_size,
         primary=primary, highlight=secondary, outline_color=style.outline_color,
         back=style.back_color, bold=-1 if style.bold else 0,
-        border_style=3 if style.background in _BOX_BACKGROUNDS else 1, outline=style.outline, shadow=style.shadow,
+        # With a plate the text style carries no box (and no border): the plate
+        # style below draws the backing.
+        border_style=1 if plate or style.background not in _BOX_BACKGROUNDS else 3,
+        outline=0 if plate else style.outline, shadow=style.shadow,
         margin_l=margins["left"], margin_r=margins["right"], margin_v=margins["bottom"],
     )
+    if plate:
+        header = header.replace("\n\n[Events]", f"\n{_plate_style_line(style, margins)}\n\n[Events]", 1)
 
     events = []
     for chunk in chunks:
@@ -142,9 +222,14 @@ def build_ass(
             # FriBidi) shapes and reorders it itself -- see captions/rtl.py.
             text = chunk.text
         text = wrap_rtl(text, chunk.text)
-        events.append(
-            f"Dialogue: 0,{_fmt_ass_time(chunk.start)},{_fmt_ass_time(chunk.end)},Default,,0,0,0,,{text}"
-        )
+        span = f"{_fmt_ass_time(chunk.start)},{_fmt_ass_time(chunk.end)}"
+        if plate:
+            lines = chunk_line_texts(chunk, break_at)
+            for plate_text in plate_lines(
+                lines, chunk.text, style, width=edl.width, height=edl.height, margins=margins,
+            ):
+                events.append(f"Dialogue: {_PLATE_LAYER},{span},{PLATE_STYLE},,0,0,0,,{plate_text}")
+        events.append(f"Dialogue: {_TEXT_LAYER if plate else 0},{span},Default,,0,0,0,,{text}")
 
     return header + "\n".join(events) + "\n"
 
