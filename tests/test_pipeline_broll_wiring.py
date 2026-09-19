@@ -76,12 +76,12 @@ def test_resolved_broll_reaches_the_render_plan_overlays(monkeypatch, stubbed_pi
     # separate concern, covered by test_brand_logo_reaches_the_render_plan_
     # overlays / test_no_logo_file_contributes_no_overlay below) -- the
     # "default" brand now ships a real logos/logo.png test asset.
-    monkeypatch.setattr(pipeline_mod, "resolve_logo_path", lambda *_a, **_k: None)
+    monkeypatch.setattr(pipeline_mod, "resolve_brand_logo", lambda *_a, **_k: None)
     source_video = tmp_path / "source.mp4"
     source_video.write_bytes(b"fake-source")
 
     result = pipeline_mod.run_pipeline(
-        source_video, enable_broll=True, enable_motion=False, offline=True,
+        source_video, enable_broll=True, enable_motion=False, offline=True, review=False,
     )
 
     assert result.final_output is not None
@@ -103,11 +103,11 @@ def test_unresolved_broll_contributes_no_overlay(monkeypatch, stubbed_pipeline, 
         spoken_concept="x", recommended_visual="x", source=BrollSourceKind.NONE,
     )
     monkeypatch.setattr(pipeline_mod, "plan_broll", lambda *_a, **_k: [none_item])
-    monkeypatch.setattr(pipeline_mod, "resolve_logo_path", lambda *_a, **_k: None)
+    monkeypatch.setattr(pipeline_mod, "resolve_brand_logo", lambda *_a, **_k: None)
 
     source_video = tmp_path / "source.mp4"
     source_video.write_bytes(b"fake-source")
-    pipeline_mod.run_pipeline(source_video, enable_broll=True, enable_motion=False, offline=True)
+    pipeline_mod.run_pipeline(source_video, enable_broll=True, enable_motion=False, offline=True, review=False)
 
     assert captured["plan"].overlays == []
 
@@ -123,12 +123,13 @@ def test_brand_logo_reaches_the_render_plan_overlays(monkeypatch, stubbed_pipeli
     logo_path = brands_root / "acme" / "logos" / "logo.png"
     logo_path.write_bytes(b"fake-png")
     monkeypatch.setattr(pipeline_mod, "load_brand", lambda name, root=None: brand_loader.load_brand(name, root=brands_root))
-    monkeypatch.setattr(pipeline_mod, "resolve_logo_path", lambda name, root=None: brand_loader.resolve_logo_path(name, root=brands_root))
+    monkeypatch.setattr(pipeline_mod, "resolve_brand_logo", lambda brand, root=None: brand_loader.resolve_brand_logo(brand, root=brands_root))
 
     source_video = tmp_path / "source.mp4"
     source_video.write_bytes(b"fake-source")
     result = pipeline_mod.run_pipeline(
         source_video, brand_name="acme", enable_broll=False, enable_motion=False, offline=True,
+        review=False, logo_mode="persistent_bug",
     )
 
     assert result.final_output is not None
@@ -144,10 +145,10 @@ def test_brand_logo_reaches_the_render_plan_overlays(monkeypatch, stubbed_pipeli
 def test_no_logo_file_contributes_no_overlay(monkeypatch, stubbed_pipeline, tmp_path: Path):
     captured, _ = stubbed_pipeline
     monkeypatch.setattr(pipeline_mod, "plan_broll", lambda *_a, **_k: [])
-    monkeypatch.setattr(pipeline_mod, "resolve_logo_path", lambda *_a, **_k: None)
+    monkeypatch.setattr(pipeline_mod, "resolve_brand_logo", lambda *_a, **_k: None)
 
     source_video = tmp_path / "source.mp4"
     source_video.write_bytes(b"fake-source")
-    pipeline_mod.run_pipeline(source_video, enable_broll=False, enable_motion=False, offline=True)
+    pipeline_mod.run_pipeline(source_video, enable_broll=False, enable_motion=False, offline=True, review=False)
 
     assert captured["plan"].overlays == []

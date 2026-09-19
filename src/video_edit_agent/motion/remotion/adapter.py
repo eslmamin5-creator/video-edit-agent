@@ -103,7 +103,7 @@ def _theme_props(brand: Brand | None) -> dict | None:
         # No arbitrary yellow fallback (spec section 3): fall back to the
         # brand's own secondary color, never invent a strong accent.
         "accent": brand.colors.accent or brand.colors.secondary,
-        "fontFamily": brand.fonts[0] if brand.fonts else _FALLBACK_FONT_FAMILY,
+        "fontFamily": brand.arabic_font or _FALLBACK_FONT_FAMILY,
         "rtl": brand.captions.rtl,
     }
 

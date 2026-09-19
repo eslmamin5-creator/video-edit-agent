@@ -17,11 +17,14 @@ from video_edit_agent.captions.chunking import CaptionChunk
 from video_edit_agent.captions.styles import CaptionStyle
 
 
-def build_karaoke_text(chunk: CaptionChunk, style: CaptionStyle) -> str:
-    parts = []
-    for w in chunk.words:
+def build_karaoke_text(chunk: CaptionChunk, style: CaptionStyle, break_before: int | None = None) -> str:
+    """`break_before` is the index of the word that starts the second line
+    (an explicit ASS line break is emitted before it)."""
+    out = ""
+    for i, w in enumerate(chunk.words):
         duration_cs = max(1, round((w.end - w.start) * 100))
         tag = f"{{\\k{duration_cs}\\kf{duration_cs}}}" if style.word_highlight else ""
-        parts.append(f"{tag}{w.word}")
-
-    return " ".join(parts)
+        if i:
+            out += "\\N" if i == break_before else " "
+        out += f"{tag}{w.word}"
+    return out

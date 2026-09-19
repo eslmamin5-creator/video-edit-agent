@@ -11,39 +11,46 @@ import re
 
 from video_edit_agent.brand.schema import Brand
 from video_edit_agent.core.schemas import EDL, AnimationKind, AnimationSpec, Transcript
+from video_edit_agent.motion.legibility import plan_title_treatment
+from video_edit_agent.subject.framing import FrameAnalysis
 
 _NUMBER_RE = re.compile(r"\b(\d[\d,]*\.?\d*%?)\b")
 _MIN_HOOK_GAP_S = 0.5
 _MAX_STAT_SLOTS = 3
-# Never let a generic English "Learn more" silently appear on non-English
-# content (Review-First Editing Workflow spec section 11 item D): a brand
-# without an explicit `cta.text_default` gets a neutral, language-appropriate
-# default instead. Still reviewable/correctable before render (spec section
-# 5's timeline review + section 2's caption review).
-_DEFAULT_CTA_TEXT_AR = "تواصل معنا"
-_DEFAULT_CTA_TEXT_EN = "Learn more"
 
 
 def _words_in_window(transcript: Transcript, start: float, end: float) -> list[str]:
     return [w.word for w in transcript.words if start <= w.start < end]
 
 
-def _resolve_cta_text(brand: Brand | None, transcript: Transcript) -> str:
-    if brand is not None and brand.cta.text_default:
-        return brand.cta.text_default
-    language = (transcript.language or "").lower()
-    if language.startswith("ar"):
-        return _DEFAULT_CTA_TEXT_AR
-    return _DEFAULT_CTA_TEXT_EN
+def _hook_extra(brand: Brand | None, text: str, edl: EDL, analysis: FrameAnalysis | None) -> dict:
+    """Legibility treatment for the hook title (see `motion/legibility.py`):
+    colour, backing plate and placement derived from the Brand Profile and, when
+    available, the footage analysis. Without a brand the title keeps the
+    renderer's default look."""
+    if brand is None:
+        return {}
+    treatment = plan_title_treatment(brand, text, edl.width, edl.height, analysis=analysis)
+    return {**treatment.as_props(), "legibility": {
+        "foreground_source": treatment.foreground_source,
+        "contrast": treatment.contrast,
+        "reasons": treatment.reasons,
+    }}
 
 
-def build_motion_plan(edl: EDL, transcript: Transcript, brand: Brand | None = None) -> list[AnimationSpec]:
+def build_motion_plan(
+    edl: EDL, transcript: Transcript, brand: Brand | None = None, cta_text: str | None = None,
+    analysis: FrameAnalysis | None = None,
+) -> list[AnimationSpec]:
     """Propose a small, high-confidence set of motion graphic slots:
 
     - a `hook_title` in the opening seconds, using the first spoken clause
     - a `lower_third` whenever the active speaker changes
     - up to `_MAX_STAT_SLOTS` `stat_counter` slots where a number is spoken
-    - a closing `cta` in the final seconds, if the timeline is long enough
+    - a closing `cta` in the final seconds -- ONLY when CTA text was explicitly
+      provided (`cta_text`, e.g. from an approved edit plan) or the Brand
+      Profile defines one. CTA is NONE by default: no generic
+      call-to-action text is ever invented.
     """
     specs: list[AnimationSpec] = []
     if not edl.clips:
@@ -61,6 +68,7 @@ def build_motion_plan(edl: EDL, transcript: Transcript, brand: Brand | None = No
                 timeline_start=0.0,
                 timeline_end=min(3.0, total_duration),
                 text=hook_text,
+                extra=_hook_extra(brand, hook_text, edl, analysis),
             )
         )
 
@@ -102,18 +110,16 @@ def build_motion_plan(edl: EDL, transcript: Transcript, brand: Brand | None = No
             )
             stat_slots += 1
 
-    if total_duration > 6.0:
-        cta_text = _resolve_cta_text(brand, transcript)
+    cta_text = cta_text or (brand.cta_text if brand is not None else None)
+    if cta_text and total_duration > 6.0:
         specs.append(
             AnimationSpec(
                 kind=AnimationKind.CTA,
                 timeline_start=max(0.0, total_duration - 3.0),
                 timeline_end=total_duration,
                 text=cta_text,
-                # The Remotion CTA composition's `actionLabel` prop falls back
-                # to a hardcoded "Learn more" defaultProp when absent (see
-                # motion/remotion/template/src/Root.tsx); setting it explicitly
-                # here is what actually prevents that silent English default.
+                # The CTA composition has no default label; the only text it
+                # ever shows is the explicitly provided one.
                 extra={"actionLabel": cta_text},
             )
         )

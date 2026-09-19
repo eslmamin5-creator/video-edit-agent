@@ -11,12 +11,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from video_edit_agent.brand.loader import load_brand, resolve_fonts_dir, resolve_logo_path
-from video_edit_agent.brand.schema import Brand
+from video_edit_agent.brand.loader import load_brand, resolve_brand_logo, resolve_fonts_dir
+from video_edit_agent.brand.logo_policy import LogoPlan, plan_logo
+from video_edit_agent.brand.schema import Brand, LogoMode
 from video_edit_agent.broll.overlay import broll_items_to_overlays
 from video_edit_agent.broll.planner import plan_broll
-from video_edit_agent.captions.engine import write_captions
-from video_edit_agent.captions.styles import resolve_style
+from video_edit_agent.broll.treatment import load_decisions
+from video_edit_agent.captions.brand_style import resolve_brand_caption_style
+from video_edit_agent.captions.engine import caption_chunks, write_captions
 from video_edit_agent.core.config import AppConfig
 from video_edit_agent.core.media import MediaError, content_hash, extract_audio, probe
 from video_edit_agent.core.project import ProjectMemory, ProjectPaths
@@ -40,6 +42,7 @@ from video_edit_agent.qa.repair import RepairResult, run_repair_loop
 from video_edit_agent.qa.technical import run_technical_qa
 from video_edit_agent.qa.visual import run_visual_qa
 from video_edit_agent.render.composition import CaptionBurn, Overlay, RenderPlan
+from video_edit_agent.render.end_card import compose_with_cards, render_card_frame
 from video_edit_agent.render.export import resolve_preset
 from video_edit_agent.render.ffmpeg import render as render_ffmpeg
 from video_edit_agent.review import state as review_state
@@ -49,18 +52,22 @@ from video_edit_agent.review.builder import (
     build_caption_preview,
     build_timeline_review,
     build_transcript_review,
+    render_timeline_markdown,
 )
+from video_edit_agent.review.corrections import apply_corrections, load_corrections
 from video_edit_agent.review.preview import (
     build_contact_sheet,
     generate_preview_frames,
+    pick_caption_timestamps,
     pick_representative_timestamps,
 )
-from video_edit_agent.review.schemas import ReviewApprovalState, ReviewStage
+from video_edit_agent.review.schemas import PreviewFrame, ReviewApprovalState, ReviewStage
 from video_edit_agent.subject.compositor import (
     find_enclosing_clip,
     render_subject_cutout,
     to_source_window,
 )
+from video_edit_agent.subject.framing import analyze_clip
 from video_edit_agent.transcription.router import TranscriptionRouter, save_transcript
 
 
@@ -84,7 +91,9 @@ class PipelineResult:
     review_dir: Path | None = None
 
 
-def _planned_motion_labels(motion_items: list[MotionPlanItem], timestamps: dict[str, float]) -> dict[str, str]:
+def _planned_motion_labels(
+    motion_items: list[MotionPlanItem], timestamps: dict[str, float], broll_items: list[BrollPlanItem] | None = None
+) -> dict[str, str]:
     """Maps each motion-derived preview label to a human-readable "planned"
     banner, using the same kind -> label rules as `pick_representative_timestamps`."""
     labels: dict[str, str] = {}
@@ -101,7 +110,38 @@ def _planned_motion_labels(motion_items: list[MotionPlanItem], timestamps: dict[
             labels[label] = (
                 f"PLANNED (not rendered): {kind} {m.spec.timeline_start:.1f}-{m.spec.timeline_end:.1f}s{behind}"
             )
+    at = timestamps.get("broll")
+    for b in broll_items or []:
+        if at is None or "broll" in labels or b.asset_path or not (b.timeline_start <= at <= b.timeline_end):
+            continue
+        if b.treatment == "generated_broll":
+            labels["broll"] = "PLANNED (not generated): generated B-roll"
+        elif b.treatment == "local_broll":
+            labels["broll"] = "PLANNED (footage needed): local B-roll"
     return labels
+
+
+def _caption_sample_lines(chunks: list, picks: dict[str, float]) -> tuple[str, str | None, str | None]:
+    """Real caption text (from the user's own transcript) at the picked preview moments."""
+
+    def text_at(label: str) -> str | None:
+        t = picks.get(label)
+        if t is None:
+            return None
+        return next((c.text for c in chunks if c.start <= t <= c.end), None)
+
+    def is_arabic(ch: str) -> bool:
+        return "\u0600" <= ch <= "\u06ff"
+
+    normal = text_at("caption_normal") or (chunks[0].text if chunks else "")
+    mixed = next(
+        (
+            c.text for c in chunks
+            if any("a" <= ch.lower() <= "z" for ch in c.text) and any(is_arabic(ch) for ch in c.text)
+        ),
+        None,
+    )
+    return normal, text_at("caption_multiline"), mixed
 
 
 def _brand_logo_overlay(logo_path: Path, brand: Brand, edl: EDL) -> Overlay:
@@ -135,24 +175,24 @@ def run_pipeline(
     enable_broll: bool = True,
     enable_motion: bool = True,
     on_progress=None,
-    review: bool = False,
+    review: bool | None = None,
     transcript_override: Transcript | None = None,
+    logo_mode: str | None = None,
 ) -> PipelineResult:
-    """Runs the full editing pipeline for a single source video and writes
-    all intermediate + final artifacts under `<source_video parent>/edit/`.
+    """Runs the editing pipeline for a single source video and writes all
+    intermediate + final artifacts under `<source_video parent>/edit/`.
 
-    `review=False` (the default) is today's original behavior, preserved
-    exactly for backward compatibility: the pipeline always renders and
-    returns a populated `final_output`. `review=True` (Review-First Editing
-    Workflow spec sections 1-8) stops right after planning/preview-frame
-    generation -- before the expensive final render -- and writes every
-    review artifact (transcript review, caption preview, brand summary,
-    timeline review, B-roll review, preview frames/contact sheet, and the
-    `READY_FOR_FINAL_RENDER` gate state) under `edit/review/`. A caller then
-    inspects/corrects those artifacts and either calls `review.state.approve`
-    then re-runs with `review=False`, or re-runs with `review=True` and
-    `transcript_override` set to a corrected `Transcript` (skipping
-    re-transcription entirely) to regenerate the review artifacts cheaply.
+    Review-first is the default. `review=None` consults the persisted review
+    state under `edit/review/`: without an approved state the run plans only
+    (transcript/caption/brand/timeline/B-roll review artifacts, preview
+    frames, the gate state) and stops before any expensive work -- no B-roll
+    generation, no motion or subject-cutout rendering, no final render. Once
+    the user has approved (`review.state.approve`), the same call renders.
+    `review=True` always plans only. `review=False` is the explicit,
+    recorded bypass (`--yes` / `--no-review`).
+
+    User transcript corrections saved under `edit/review/` are applied on
+    every run, so re-running regenerates only cheap review artifacts.
     """
 
     def progress(stage: str) -> None:
@@ -169,6 +209,12 @@ def run_pipeline(
     memory.source_inventory.append(str(source_video))
     memory.brand = brand.name
     warnings: list[str] = []
+
+    review_dir = paths.edit_dir / "review"
+    if review is False and not review_state.is_ready_for_final_render(review_dir):
+        review_state.bypass(review_dir, "review bypassed explicitly (--yes / --no-review)")
+    approval = review_state.load_review_state(review_dir)
+    plan_only = review is True or not approval.ready_for_final_render
 
     # 1. Media inventory
     progress("probe")
@@ -195,7 +241,11 @@ def run_pipeline(
             cfg.transcription, offline=offline, gemini_model=cfg.gemini.transcription_model
         )
         transcript = router.transcribe(audio_path)
-    save_transcript(transcript, paths.transcript_unified)
+    save_transcript(transcript, paths.transcript_unified)  # raw ASR; corrections stay separate
+    corrections = load_corrections(review_dir)
+    if corrections:
+        transcript = apply_corrections(transcript, corrections)
+        memory.log_decision(f"Applied {len(corrections)} persisted transcript correction(s); timing preserved")
     paths.transcript_txt.write_text(transcript.full_text, encoding="utf-8")
     memory.log_decision(f"Transcribed with provider: {transcript.provider}")
 
@@ -213,7 +263,14 @@ def run_pipeline(
         memory.log_rejected(f"EDL validation failed: {exc}")
         memory.save()
         return PipelineResult(project_dir=paths.edit_dir, final_output=None, transcript=transcript, warnings=[str(exc)])
-    plan_punch_ins(edl, energy=brand.motion.energy)
+    # Where the subject/face sit and how bright the backdrop is, sampled from
+    # the opening seconds. Best-effort (None when unavailable): it keeps the
+    # punch-in face-safe and lets the hook title be placed and coloured legibly.
+    lead_clip = edl.clips[0] if edl.clips else None
+    footage = analyze_clip(
+        lead_clip.source_file, lead_clip.source_in, min(lead_clip.source_out, lead_clip.source_in + 4.0)
+    ) if lead_clip else None
+    plan_punch_ins(edl, energy=brand.motion.energy, face_box=footage.face if footage else None)
     from video_edit_agent.editorial.edl import save as save_edl
 
     save_edl(edl, paths.edl_json)
@@ -224,7 +281,8 @@ def run_pipeline(
 
     # 5. Captions (Arabic-capable, RTL, word-highlight per spec section 15)
     progress("captions")
-    caption_style = resolve_style(caption_style_name, brand.captions.model_dump())
+    resolved_style = resolve_brand_caption_style(caption_style_name, brand)
+    caption_style = resolved_style.style
     write_captions(transcript, edl, caption_style, paths.edit_dir / "captions.ass", paths.master_srt)
 
     # 6. B-roll planning (graceful: never blocks the pipeline)
@@ -234,7 +292,8 @@ def run_pipeline(
         try:
             broll_items = plan_broll(
                 edl, transcript, paths.edit_dir / "broll_assets", paths.cache_dir / "broll_generated",
-                brand=brand, allow_generation=not offline and not review,
+                brand=brand, decisions=load_decisions(review_dir),
+                allow_generation=not offline and not plan_only and approval.broll_generation_approved,
             )
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"B-roll planning skipped: {exc}")
@@ -257,14 +316,14 @@ def run_pipeline(
     if enable_motion:
         progress("motion")
         try:
-            specs = build_motion_plan(edl, transcript, brand=brand)
+            specs = build_motion_plan(edl, transcript, brand=brand, analysis=footage)
         except Exception as exc:  # noqa: BLE001
             specs = []
             warnings.append(f"Motion planning skipped: {exc}")
 
         motion_output_dir = paths.cache_dir / "motion"
         for i, spec in enumerate(specs):
-            if review:
+            if plan_only:
                 # Review-First: plan only. No motion or subject-cutout rendering
                 # happens before the user approves the plan.
                 motion_items.append(MotionPlanItem(spec=spec, engine_used=None, output_path=None))
@@ -319,18 +378,26 @@ def run_pipeline(
 
         import json
 
-        if not review:
+        if not plan_only:
             paths.motion_plan.write_text(
                 json.dumps([item.model_dump(mode="json") for item in motion_items], ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
 
-    # 7b. Brand logo watermark (spec section 23, Baseline Recovery Milestone
-    # item 5): drawn last so it sits on top of B-roll and motion graphics.
-    logo_path = resolve_logo_path(brand.name)
-    if logo_path is not None:
+    # 7b. Logo policy: the Brand Profile (or an explicit override) decides
+    # whether the logo appears as a persistent bug, an intro/end card, or not
+    # at all. Only `persistent_bug` adds an overlay; cards wrap the content.
+    logo_path = resolve_brand_logo(brand)
+    logo_plan: LogoPlan = plan_logo(
+        brand, logo_path, edl.width, edl.height, edl.fps,
+        mode_override=LogoMode(logo_mode) if logo_mode else None,
+    )
+    warnings.extend(logo_plan.warnings)
+    if logo_plan.persistent_bug and logo_path is not None:
         overlays.append(_brand_logo_overlay(logo_path, brand, edl))
-        memory.log_decision(f"Applied brand logo watermark from {logo_path}")
+        memory.log_decision(f"Applied persistent brand logo bug from {logo_path} (logo mode: persistent_bug)")
+    else:
+        memory.log_decision(f"Logo mode '{logo_plan.mode.value}': no persistent logo bug")
 
     fonts_dir = resolve_fonts_dir(brand.name)
     plan = RenderPlan(
@@ -343,56 +410,85 @@ def run_pipeline(
     # here, before the expensive final render, and hand the user everything
     # needed to inspect/correct the plan. Never reached when `review=False`
     # (the default), so this cannot regress any existing caller.
-    if review:
+    if plan_only:
         progress("review")
-        review_dir = paths.edit_dir / "review"
         review_dir.mkdir(parents=True, exist_ok=True)
 
         cta_text = next(
             (m.spec.text for m in motion_items if m.spec.kind.value == "cta" and m.spec.text),
-            brand.cta.text_default or "",
+            brand.cta_text,
         )
-        logo_present = logo_path is not None
+        chunks = caption_chunks(transcript, edl, caption_style)
+        caption_picks = pick_caption_timestamps(chunks, caption_style.line_break_chars, caption_style.word_highlight)
+        sample_lines = _caption_sample_lines(chunks, caption_picks)
 
         (review_dir / "transcript_review.json").write_text(
             build_transcript_review(transcript, caption_style).model_dump_json(indent=2), encoding="utf-8"
         )
         (review_dir / "caption_preview.json").write_text(
-            build_caption_preview(caption_style, brand).model_dump_json(indent=2), encoding="utf-8"
+            build_caption_preview(
+                caption_style, brand, sample_lines=sample_lines, notes=resolved_style.notes
+            ).model_dump_json(indent=2), encoding="utf-8"
         )
         (review_dir / "brand_summary.json").write_text(
-            build_brand_summary(brand, str(logo_path) if logo_path else None, cta_text, caption_style)
-            .model_dump_json(indent=2),
+            build_brand_summary(
+                brand, str(logo_path) if logo_path else None, cta_text, caption_style,
+                logo_plan=logo_plan, style_notes=resolved_style.notes,
+            ).model_dump_json(indent=2),
             encoding="utf-8",
         )
-        (review_dir / "timeline_review.json").write_text(
-            build_timeline_review(edl, transcript, broll_items, motion_items, logo_present).model_dump_json(
-                indent=2
-            ),
-            encoding="utf-8",
+        end_card_frame: PreviewFrame | None = None
+        if logo_plan.end_card is not None:
+            try:
+                spec = logo_plan.end_card
+                frame_path = render_card_frame(
+                    spec, review_dir / "frames" / "frame_end_card.jpg", paths.cache_dir / "end_card_preview"
+                )
+                end_card_frame = PreviewFrame(
+                    label="end_card", timeline_at=edl.total_duration + spec.duration * 0.8, image_path=str(frame_path)
+                )
+            except Exception as exc:  # noqa: BLE001 - preview only
+                warnings.append(f"End-card preview skipped: {exc}")
+        timeline = build_timeline_review(
+            edl, transcript, broll_items, motion_items,
+            logo_plan=logo_plan, cta_text=cta_text,
+            caption_note="brand-driven (font, colors and highlight from the Brand Profile)",
+            end_card_preview=end_card_frame.image_path if end_card_frame else None,
         )
+        (review_dir / "timeline_review.json").write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
+        (review_dir / "timeline_review.md").write_text(render_timeline_markdown(timeline), encoding="utf-8")
         (review_dir / "broll_review.json").write_text(
             build_broll_review(broll_items).model_dump_json(indent=2), encoding="utf-8"
         )
 
         try:
-            timestamps = pick_representative_timestamps(edl, motion_items, broll_items, transcript)
+            timestamps = pick_representative_timestamps(
+                edl, motion_items, broll_items, transcript, caption_picks=caption_picks
+            )
             # Motion is planned-only in review mode, so its frames get a
             # "planned treatment" banner instead of a real Remotion render.
-            planned_labels = _planned_motion_labels(motion_items, timestamps)
+            planned_labels = _planned_motion_labels(motion_items, timestamps, broll_items)
             frame_set = generate_preview_frames(
                 plan, timestamps, review_dir / "frames", planned_labels=planned_labels
             )
+            if end_card_frame is not None:
+                frame_set.frames.append(end_card_frame)
             build_contact_sheet(frame_set, review_dir / "contact_sheet.jpg")
             (review_dir / "preview_frames.json").write_text(frame_set.model_dump_json(indent=2), encoding="utf-8")
         except Exception as exc:  # noqa: BLE001 - preview frames are a convenience, never a hard failure
             warnings.append(f"Preview frame generation skipped: {exc}")
 
+        # Carry open transcript items forward: re-running the review must
+        # never silently forget what the user has not confirmed yet.
         review_state.save_review_state(
-            ReviewApprovalState(stage=ReviewStage.REVIEW_VISUALS, ready_for_final_render=False),
+            ReviewApprovalState(
+                stage=ReviewStage.REVIEW_VISUALS,
+                ready_for_final_render=False,
+                unresolved_transcript=approval.unresolved_transcript,
+            ),
             review_dir,
         )
-        memory.log_decision("Stopped at review gate before final render (review=True)")
+        memory.log_decision("Stopped at review gate before final render (approval required)")
         memory.save()
 
         return PipelineResult(
@@ -412,7 +508,13 @@ def run_pipeline(
     # 8. Render (spec sections 12, 14, 47 — argument-array ffmpeg only)
     progress("render")
     preset = resolve_preset(preset_name)
-    final_output = render_ffmpeg(plan, paths.final_mp4, preset)
+    cards = logo_plan.cards
+    content_output = render_ffmpeg(plan, paths.cache_dir / "main_content.mp4" if cards else paths.final_mp4, preset)
+    final_output = content_output
+    if cards:
+        final_output = compose_with_cards(
+            content_output, paths.final_mp4, paths.cache_dir / "cards", logo_plan.intro, logo_plan.end_card
+        )
     memory.render_history.append(f"Rendered {final_output} with preset '{preset_name}'")
 
     # 9. Multi-layer QA + bounded auto-repair (spec section 33)
@@ -420,9 +522,9 @@ def run_pipeline(
 
     def collect_qa() -> QAReport:
         issues: list[QAIssue] = []
-        issues.extend(run_technical_qa(final_output, edl))
+        issues.extend(run_technical_qa(content_output, edl))
         issues.extend(run_language_qa(transcript, transcript))
-        issues.extend(run_visual_qa(final_output))
+        issues.extend(run_visual_qa(content_output))
         issues.extend(run_brand_qa(edl, transcript, brand, has_cta_slot=any(
             m.spec.kind.value == "cta" for m in motion_items if m.output_path
         )))
@@ -432,6 +534,7 @@ def run_pipeline(
     repair_result: RepairResult = run_repair_loop(initial_report, collect_qa, repair_handlers={})
     memory.qa_issues.extend(f"[{i.severity.value}] {i.category}: {i.message}" for i in repair_result.report.issues)
     memory.save()
+    review_state.mark_rendered(review_dir, "final render completed")
 
     return PipelineResult(
         project_dir=paths.edit_dir,

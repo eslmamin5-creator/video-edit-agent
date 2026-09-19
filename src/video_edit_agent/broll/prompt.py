@@ -25,13 +25,13 @@ REALISM_RULES = (
     "realistic color grading, plausible real-world imperfections (grain, "
     "minor asymmetry, natural framing). Avoid a glossy/plastic AI-generated "
     "look, avoid excessive HDR/bloom/glow, avoid an artificial stock-photo "
-    "sheen."
+    "sheen, avoid cheap stock-AI composition. No brand logos unless explicitly requested."
 )
 
 NO_TEXT_RULES = (
     "No readable text of any kind: no Arabic text, no English text, no "
     "letters, no numbers, no signage, no labels, no logos, no captions, no "
-    "UI text, no document text. If a screen, sign, or document appears in "
+    "fake UI, no document text. If a screen, sign, or document appears in "
     "frame, it must show only abstract, non-readable visual information "
     "(blurred, out of focus, or generic patterns) -- never legible glyphs."
 )

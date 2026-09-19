@@ -76,7 +76,7 @@ def test_fixed_caption_render_differs_from_known_buggy_double_shaped_render(tmp_
     header = ASS_HEADER_TEMPLATE.format(
         width=WIDTH, height=HEIGHT, font=style.font_ar, size=style.font_size,
         primary=style.primary_color, highlight=style.highlight_color, outline_color=style.outline_color,
-        back=style.back_color, bold=-1 if style.bold else 0, outline=style.outline, shadow=style.shadow,
+        back=style.back_color, bold=-1 if style.bold else 0, border_style=1, outline=style.outline, shadow=style.shadow,
         margin_l=40, margin_r=40, margin_v=60,
     )
     buggy_event = f"Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{buggy_text}"

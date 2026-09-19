@@ -21,6 +21,9 @@ def broll_item_to_overlay(item: BrollPlanItem) -> Overlay | None:
     or `None` if the item has no usable asset (unresolved / `NONE` source)."""
     if item.source == BrollSourceKind.NONE or not item.asset_path:
         return None
+    # Slots the editor decided to handle on-speaker/with motion never cover the speaker.
+    if item.treatment not in (None, "local_broll", "generated_broll"):
+        return None
     return Overlay(
         path=Path(item.asset_path),
         start=item.timeline_start,

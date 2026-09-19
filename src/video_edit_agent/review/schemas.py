@@ -62,6 +62,9 @@ class TranscriptCorrection(BaseModel):
 
     segment_id: str
     corrected_text: str
+    # None = `corrected_text` replaces the whole segment; an int replaces only
+    # that (0-based) word of the segment, leaving the rest untouched.
+    word_index: int | None = None
 
 
 class CaptionPreview(BaseModel):
@@ -75,6 +78,14 @@ class CaptionPreview(BaseModel):
     safe_zone_note: str
     sample_arabic_line: str
     sample_mixed_line: str
+    background_mode: str = "box"
+    outline_color: str | None = None
+    word_highlight: bool = False
+    line_break_chars: int = 0
+    max_chars_per_line: int | None = None
+    # Sample chunks taken from the real transcript (not hardcoded copy).
+    sample_multiline: str | None = None
+    notes: list[str] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------
@@ -92,9 +103,14 @@ class BrandSummary(BaseModel):
     arabic_font: str | None = None
     english_font: str | None = None
     caption_style: str | None = None
-    cta_text: str
+    cta_text: str | None = None
+    cta_status: str = "NONE"
     cta_style: str | None = None
     motion_accent_style: str | None = None
+    logo_mode: str = "end_card"
+    logo_duration: float | None = None
+    logo_reveal: str | None = None
+    missing: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -111,15 +127,44 @@ class TimelineReviewItem(BaseModel):
     zoom: float
     caption_text: str
     broll_description: str | None = None
+    editorial_treatment: str | None = None  # see broll/treatment.py
     motion_treatment: str | None = None
     behind_subject: bool = False
     logo_present: bool = False
     cta_present: bool = False
 
 
+class TimelineEndCard(BaseModel):
+    """The branded end card appended after the content (logo mode `end_card` /
+    `intro_and_end`); every value is derived from the Brand Profile's logo
+    behavior."""
+
+    treatment: str = "BRANDED END CARD"
+    start: float
+    duration: float
+    logo: str = "centered"
+    logo_asset: str | None = None
+    background: str = ""
+    motion: str = ""
+    cta: str = "NONE"
+    preview_frame: str | None = None
+
+
+class TimelinePolicy(BaseModel):
+    logo_mode: str
+    persistent_logo_bug: str  # "NONE" or where the bug sits
+    captions: str
+    cta: str
+    intro_card: bool = False
+    end_card: TimelineEndCard | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 class TimelineReview(BaseModel):
     total_duration: float
     items: list[TimelineReviewItem] = Field(default_factory=list)
+    policy: TimelinePolicy | None = None
+    total_duration_with_cards: float | None = None
 
 
 # --------------------------------------------------------------------------
@@ -143,6 +188,11 @@ class BrollReviewItem(BaseModel):
     draft_prompt: str | None = None
     confidence: float = 0.0
     quality_gate_passed: bool | None = None
+    # Editorial decision for this slot (one of broll.treatment.Treatment).
+    treatment: str | None = None
+    treatment_reason: str | None = None
+    visual_concept: str | None = None
+    generate_later: bool = False
 
 
 class BrollReview(BaseModel):
@@ -179,8 +229,24 @@ class ReviewStage(str, Enum):
     RENDERED = "RENDERED"
 
 
+class UnresolvedTranscriptItem(BaseModel):
+    """A transcript segment the reviewer has NOT confirmed. It stays open (and
+    blocks approval) until a correction is persisted or it is explicitly
+    resolved; nothing is guessed or rewritten in the meantime."""
+
+    segment_id: str
+    segment: int | None = None  # 1-based position, as shown in the audio review
+    asr_text: str = ""
+    reason: str = ""
+
+
 class ReviewApprovalState(BaseModel):
     stage: ReviewStage = ReviewStage.ANALYZE
     ready_for_final_render: bool = False
     bypassed: bool = False  # true when the user explicitly skipped review (--yes/--no-review)
+    # Approval of the B-roll PLAN; provider generation may only run when set.
+    broll_generation_approved: bool = False
+    # Transcript segments still awaiting the user's confirmation; approval is
+    # refused while any remain (see review.state.approve).
+    unresolved_transcript: list[UnresolvedTranscriptItem] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)

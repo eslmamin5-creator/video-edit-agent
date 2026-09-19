@@ -5,8 +5,10 @@ a pure, cheap transform of data the pipeline already computed (spec section
 """
 from __future__ import annotations
 
+from video_edit_agent.brand.logo_policy import LogoPlan
 from video_edit_agent.brand.schema import Brand
 from video_edit_agent.broll.prompt import build_broll_prompt
+from video_edit_agent.broll.treatment import BROLL_TREATMENTS
 from video_edit_agent.captions.styles import CaptionStyle
 from video_edit_agent.core.schemas import (
     EDL,
@@ -15,12 +17,15 @@ from video_edit_agent.core.schemas import (
     MotionPlanItem,
     Transcript,
 )
+from video_edit_agent.review.corrections import apply_corrections
 from video_edit_agent.review.schemas import (
     SUSPICIOUS_CONFIDENCE_THRESHOLD,
     BrandSummary,
     BrollReview,
     BrollReviewItem,
     CaptionPreview,
+    TimelineEndCard,
+    TimelinePolicy,
     TimelineReview,
     TimelineReviewItem,
     TranscriptCorrection,
@@ -96,36 +101,9 @@ def build_transcript_review(transcript: Transcript, style: CaptionStyle | None =
 def apply_transcript_corrections(
     transcript: Transcript, corrections: list[TranscriptCorrection]
 ) -> Transcript:
-    """Applies user-supplied `TranscriptCorrection`s to a copy of `transcript`,
-    changing only segment text (and its single synthetic word) -- never
-    segment/word timing (spec section 1: "Corrections must not change timing
-    unnecessarily"). The corrected segment's original per-word timestamps are
-    collapsed into one span-covering word, since the exact per-word timing
-    of a hand-edited sentence can no longer be trusted to align 1:1 with the
-    original ASR words; downstream caption line-breaking only needs a
-    segment's total span and text, not the old per-word grid.
-    """
-    corrections_by_id = {c.segment_id: c.corrected_text for c in corrections}
-    if not corrections_by_id:
-        return transcript
-    new_segments = []
-    for seg in transcript.segments:
-        corrected_text = corrections_by_id.get(seg.id)
-        if corrected_text is None:
-            new_segments.append(seg)
-            continue
-        new_seg = seg.model_copy(
-            update={
-                "text": corrected_text,
-                "words": [
-                    type(seg.words[0])(word=corrected_text, start=seg.start, end=seg.end, confidence=1.0)
-                ]
-                if seg.words
-                else [],
-            }
-        )
-        new_segments.append(new_seg)
-    return transcript.model_copy(update={"segments": new_segments})
+    """Applies user-supplied corrections without changing timing; see
+    `review.corrections.apply_corrections`."""
+    return apply_corrections(transcript, corrections)
 
 
 # --------------------------------------------------------------------------
@@ -133,13 +111,23 @@ def apply_transcript_corrections(
 # --------------------------------------------------------------------------
 
 
-def build_caption_preview(style: CaptionStyle, brand: Brand | None = None) -> CaptionPreview:
+def build_caption_preview(
+    style: CaptionStyle,
+    brand: Brand | None = None,
+    *,
+    sample_lines: tuple[str, str | None, str | None] | None = None,
+    notes: list[str] | None = None,
+) -> CaptionPreview:
+    """`sample_lines` = (normal, multi-line, mixed-script) text taken from the
+    real transcript so the preview shows the user's own words -- errors and
+    dialect included -- not canned copy."""
     safe_zone = None
     if brand and brand.safe_zones:
         safe_zone = brand.safe_zones
     safe_zone_note = (
         f"safe zones: {safe_zone}" if safe_zone else "safe zones: none configured (using preset default position)"
     )
+    normal, multiline, mixed = sample_lines or ("", None, None)
     return CaptionPreview(
         style_name=style.name,
         font_ar=style.font_ar,
@@ -149,8 +137,15 @@ def build_caption_preview(style: CaptionStyle, brand: Brand | None = None) -> Ca
         back_color=style.back_color,
         position="bottom-center",
         safe_zone_note=safe_zone_note,
-        sample_arabic_line="مرحباً بكم في هذا الفيديو",
-        sample_mixed_line="جربوا Discount Code: SAVE20 دلوقتي",
+        sample_arabic_line=normal,
+        sample_mixed_line=mixed or "",
+        sample_multiline=multiline,
+        background_mode=style.background,
+        outline_color=style.outline_color,
+        word_highlight=style.word_highlight,
+        line_break_chars=style.line_break_chars,
+        max_chars_per_line=style.max_chars_per_line,
+        notes=list(notes or []),
     )
 
 
@@ -162,21 +157,31 @@ def build_caption_preview(style: CaptionStyle, brand: Brand | None = None) -> Ca
 def build_brand_summary(
     brand: Brand,
     logo_path: str | None,
-    cta_text: str,
+    cta_text: str | None,
     caption_style: CaptionStyle | None = None,
+    logo_plan: LogoPlan | None = None,
+    style_notes: list[str] | None = None,
 ) -> BrandSummary:
-    warnings: list[str] = []
+    warnings: list[str] = list(style_notes or [])
+    missing: list[str] = []
     accent_fallback_used = brand.colors.accent is None
     accent_color = brand.colors.accent or brand.colors.secondary
     if accent_fallback_used:
+        missing.append("colors.accent")
         warnings.append(
             f"brand '{brand.name}' has no accent color set; using secondary color "
             f"'{brand.colors.secondary}' as a neutral fallback instead of inventing one"
         )
     if logo_path is None:
+        missing.append("logo.asset")
         warnings.append(f"brand '{brand.name}' has no logo asset; no logo/watermark will be composited")
-    if not brand.fonts:
+    if not (brand.arabic_font or brand.fonts):
+        missing.append("typography.arabic")
         warnings.append(f"brand '{brand.name}' has no font list; using caption preset defaults")
+    if logo_plan is not None:
+        warnings.extend(w for w in logo_plan.warnings if w not in warnings)
+    behavior = brand.logo.behavior
+    cta = (cta_text or "").strip() or None
 
     return BrandSummary(
         brand_name=brand.name,
@@ -185,12 +190,17 @@ def build_brand_summary(
         secondary_color=brand.colors.secondary,
         accent_color=accent_color,
         accent_fallback_used=accent_fallback_used,
-        arabic_font=caption_style.font_ar if caption_style else (brand.fonts[0] if brand.fonts else None),
-        english_font=caption_style.font_en if caption_style else (brand.fonts[0] if brand.fonts else None),
+        arabic_font=caption_style.font_ar if caption_style else brand.arabic_font,
+        english_font=caption_style.font_en if caption_style else brand.latin_font,
         caption_style=caption_style.name if caption_style else brand.captions.preset,
-        cta_text=cta_text,
+        cta_text=cta,
+        cta_status="PROVIDED" if cta else "NONE",
         cta_style=brand.cta.style,
         motion_accent_style=brand.motion.preferred_engine,
+        logo_mode=(logo_plan.mode if logo_plan else behavior.mode).value,
+        logo_duration=behavior.duration,
+        logo_reveal=behavior.reveal,
+        missing=missing,
         warnings=warnings,
     )
 
@@ -205,8 +215,15 @@ def build_timeline_review(
     transcript: Transcript,
     broll_plan: list[BrollPlanItem],
     motion_plan: list[MotionPlanItem],
-    logo_present: bool,
+    logo_present: bool = False,
+    *,
+    logo_plan: LogoPlan | None = None,
+    cta_text: str | None = None,
+    caption_note: str = "brand-driven",
+    end_card_preview: str | None = None,
 ) -> TimelineReview:
+    if logo_plan is not None:
+        logo_present = logo_plan.persistent_bug
     items: list[TimelineReviewItem] = []
     for clip in edl.clips:
         broll_match = next(
@@ -228,15 +245,20 @@ def build_timeline_review(
         caption_words = [
             w.word for w in transcript.words if clip.timeline_in <= w.start < clip.timeline_out
         ]
+        # A slot the editor keeps on the speaker (punch-in, typography, ...) is
+        # not a cutaway: only local/generated B-roll (or an undecided slot) is.
+        treatment = broll_match.treatment if broll_match else None
+        is_cutaway = broll_match is not None and (treatment is None or treatment in {t.value for t in BROLL_TREATMENTS})
         items.append(
             TimelineReviewItem(
                 timeline_start=clip.timeline_in,
                 timeline_end=clip.timeline_out,
-                mode="broll" if broll_match else "talking_head",
+                mode="broll" if is_cutaway else "talking_head",
                 cut_reason=clip.reason.value if hasattr(clip.reason, "value") else str(clip.reason),
                 zoom=clip.zoom,
                 caption_text=" ".join(caption_words),
-                broll_description=broll_match.recommended_visual if broll_match else None,
+                broll_description=broll_match.recommended_visual if is_cutaway else None,
+                editorial_treatment=treatment,
                 motion_treatment=(
                     motion_match.spec.kind.value
                     if motion_match and hasattr(motion_match.spec.kind, "value")
@@ -255,7 +277,102 @@ def build_timeline_review(
                 ),
             )
         )
-    return TimelineReview(total_duration=edl.total_duration, items=items)
+    policy = _build_policy(edl, logo_plan, cta_text, caption_note, end_card_preview)
+    end = policy.end_card.duration if policy and policy.end_card else 0.0
+    intro = logo_plan.intro.duration if logo_plan is not None and logo_plan.intro is not None else 0.0
+    return TimelineReview(
+        total_duration=edl.total_duration,
+        items=items,
+        policy=policy,
+        total_duration_with_cards=(edl.total_duration + intro + end) if (intro or end) else None,
+    )
+
+
+def _build_policy(
+    edl: EDL,
+    logo_plan: LogoPlan | None,
+    cta_text: str | None,
+    caption_note: str,
+    end_card_preview: str | None,
+) -> TimelinePolicy | None:
+    if logo_plan is None:
+        return None
+    cta = (cta_text or "").strip()
+    end_card = None
+    if logo_plan.end_card is not None:
+        spec = logo_plan.end_card
+        background = (
+            f"solid brand primary {spec.background_top}"
+            if spec.background_top == spec.background_bottom
+            else f"gradient {spec.background_top} -> {spec.background_bottom} (brand primary -> secondary)"
+        )
+        motion = {
+            "subtle": "subtle logo reveal (fade + small scale settle)",
+            "fade": "logo fade-in",
+            "none": "no logo animation",
+        }.get(spec.reveal, spec.reveal)
+        if spec.accent and spec.accent_style == "underline":
+            motion += f"; brand accent {spec.accent} as a thin underline"
+        end_card = TimelineEndCard(
+            start=edl.total_duration,
+            duration=spec.duration,
+            logo_asset=str(spec.logo_path) if spec.logo_path else None,
+            background=background,
+            motion=motion,
+            cta=cta or "NONE",
+            preview_frame=end_card_preview,
+        )
+    return TimelinePolicy(
+        logo_mode=logo_plan.mode.value,
+        persistent_logo_bug="top-right corner (opt-in persistent_bug)" if logo_plan.persistent_bug else "NONE",
+        captions=caption_note,
+        cta=cta or "NONE",
+        intro_card=logo_plan.intro is not None,
+        end_card=end_card,
+        warnings=list(logo_plan.warnings),
+    )
+
+
+def render_timeline_markdown(review: TimelineReview) -> str:
+    """Human-readable version of the timeline review."""
+    lines = ["# Timeline review", ""]
+    pol = review.policy
+    if pol:
+        lines += [
+            "## Policies",
+            f"- Logo mode: {pol.logo_mode}",
+            f"- Persistent logo bug (main content): {pol.persistent_logo_bug}",
+            f"- Captions: {pol.captions}",
+            f"- CTA: {pol.cta}",
+            "",
+        ]
+    lines += [f"## Main content ({review.total_duration:.2f}s)", ""]
+    for it in review.items:
+        bits = [f"{it.timeline_start:6.2f}-{it.timeline_end:6.2f}s", it.mode, f"zoom x{it.zoom:.2f}"]
+        if it.motion_treatment:
+            bits.append(f"motion: {it.motion_treatment}{' (behind subject)' if it.behind_subject else ''}")
+        if it.editorial_treatment:
+            bits.append(f"treatment: {it.editorial_treatment}")
+        if it.broll_description:
+            bits.append(f"b-roll: {it.broll_description}")
+        lines.append("- " + " | ".join(bits))
+        if it.caption_text:
+            lines.append(f"    caption: {it.caption_text}")
+    if pol and pol.end_card:
+        e = pol.end_card
+        lines += [
+            "",
+            f"## End ({e.start:.2f}-{e.start + e.duration:.2f}s)",
+            f"- Treatment: {e.treatment}",
+            f"- Duration: {e.duration:.1f}s",
+            f"- Logo: {e.logo}",
+            f"- Background: {e.background}",
+            f"- Motion: {e.motion}",
+            f"- CTA: {e.cta}",
+        ]
+    if pol:
+        lines += [f"- WARNING: {w}" for w in pol.warnings]
+    return "\n".join(lines) + "\n"
 
 
 # --------------------------------------------------------------------------
@@ -267,6 +384,15 @@ def build_broll_review(broll_plan: list[BrollPlanItem]) -> BrollReview:
     items = []
     for item in sorted(broll_plan, key=lambda b: b.timeline_start):
         source = item.source.value if hasattr(item.source, "value") else str(item.source)
+        if item.source != BrollSourceKind.NONE:
+            recommendation = f"use existing asset ({source})"
+        elif item.generate_later:
+            recommendation = (
+                item.source_recommendation
+                or "generate only after this plan is approved (Gemini image, then Veo), or supply your own clip"
+            )
+        else:
+            recommendation = item.source_recommendation or "no B-roll needed for this treatment"
         items.append(
             BrollReviewItem(
                 timeline_start=item.timeline_start,
@@ -274,17 +400,17 @@ def build_broll_review(broll_plan: list[BrollPlanItem]) -> BrollReview:
                 spoken_context=item.spoken_concept,
                 recommended_visual=item.recommended_visual,
                 source=source,
-                source_recommendation=(
-                    "no local/user asset found; on approval generate one (Gemini image, then Veo) "
-                    "or supply your own clip"
-                    if item.source == BrollSourceKind.NONE
-                    else f"use existing asset ({source})"
-                ),
+                source_recommendation=recommendation,
                 asset_path=item.asset_path,
                 prompt=item.prompt,
-                draft_prompt=build_broll_prompt(item),
+                # Draft prompts exist only for slots that would be generated.
+                draft_prompt=build_broll_prompt(item) if item.generate_later else None,
                 confidence=item.confidence,
                 quality_gate_passed=None if item.asset_path is None else True,
+                treatment=item.treatment,
+                treatment_reason=item.treatment_reason,
+                visual_concept=item.visual_concept,
+                generate_later=item.generate_later,
             )
         )
     return BrollReview(items=items)

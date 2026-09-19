@@ -82,7 +82,7 @@ def pipeline_env(monkeypatch, tmp_path: Path, sample_transcript, three_clip_edl:
     monkeypatch.setattr(pipeline_mod, "validate_edl", lambda *_a, **_k: None)
     monkeypatch.setattr(pipeline_mod, "write_captions", lambda *_a, **_k: None)
     monkeypatch.setattr(pipeline_mod, "build_motion_plan", lambda *_a, **_k: list(planned_specs))
-    monkeypatch.setattr(pipeline_mod, "resolve_logo_path", lambda *_a, **_k: None)
+    monkeypatch.setattr(pipeline_mod, "resolve_brand_logo", lambda *_a, **_k: None)
 
     candidate = BrollPlanItem(
         timeline_start=0.2, timeline_end=1.2, purpose="context", spoken_concept="an office",
@@ -150,6 +150,27 @@ def test_review_true_never_renders_or_generates(monkeypatch, pipeline_env, plann
     assert "Join ACME" in json.dumps(brand_summary, ensure_ascii=False)
 
 
+def test_review_run_keeps_unresolved_transcript_items_open(monkeypatch, pipeline_env):
+    """A review re-run must not forget what the user has not confirmed, must
+    not approve B-roll generation, and must not flip the render gate."""
+    from video_edit_agent.core.project import ProjectPaths
+    from video_edit_agent.review import state as review_state
+    from video_edit_agent.review.schemas import UnresolvedTranscriptItem
+
+    monkeypatch.setattr(pipeline_mod, "render_motion", _boom("render_motion"))
+    monkeypatch.setattr(pipeline_mod, "render_ffmpeg", _boom("render_ffmpeg"))
+    review_dir = ProjectPaths.for_source(pipeline_env).edit_dir / "review"
+    review_state.flag_unresolved(review_dir, UnresolvedTranscriptItem(segment_id="s0", segment=1, reason="unclear"))
+
+    result = pipeline_mod.run_pipeline(pipeline_env, offline=False, review=True)
+
+    state = review_state.load_review_state(result.review_dir)
+    assert [i.segment_id for i in state.unresolved_transcript] == ["s0"]
+    assert state.ready_for_final_render is False
+    assert state.broll_generation_approved is False
+    assert result.final_output is None
+
+
 def test_preview_frame_failure_is_a_warning_in_review_mode(monkeypatch, pipeline_env):
     """The lightweight preview step is the only media work allowed in review
     mode; a failure there is a warning, never a crash."""
@@ -200,6 +221,8 @@ def test_review_false_still_follows_normal_render_path(monkeypatch, pipeline_env
     assert calls["cutout"] == 1  # the one behind_subject spec
     assert calls["allow_generation"] == [True]
     assert result.review_dir is None
+    state = json.loads((pipeline_env.parent / "edit" / "review" / "review_state.json").read_text(encoding="utf-8"))
+    assert state["bypassed"] is True  # the bypass is explicit and recorded
 
 
 def test_review_mode_forces_generation_off_even_when_online(monkeypatch, pipeline_env):
@@ -258,7 +281,7 @@ def test_broll_review_shows_planned_visual_source_and_draft_prompt():
     )
     earlier = BrollPlanItem(
         timeline_start=1.0, timeline_end=3.0, purpose="context", spoken_concept="an office",
-        recommended_visual="office establishing shot",
+        recommended_visual="office establishing shot", treatment="generated_broll", generate_later=True,
     )
     review = build_broll_review([later, earlier])
 

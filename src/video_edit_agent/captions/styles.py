@@ -27,6 +27,14 @@ class CaptionStyle:
     max_chars_per_line: int = 26
     word_highlight: bool = False
     uppercase: bool = False  # never force True for Arabic; presets may opt in for Latin-only text
+    # Caption backing: "box" (opaque box in `outline_color`, legacy default),
+    # "brand_box" (same box but the caller supplies a translucent brand tint in
+    # `outline_color` and `outline` is the box padding), "outline" (stroked
+    # text, no box).
+    background: str = "box"
+    # Chunks longer than this many characters are split into two balanced
+    # lines (0 = off, let the renderer wrap at the canvas edge).
+    line_break_chars: int = 0
 
 
 PRESETS: dict[str, CaptionStyle] = {
@@ -61,3 +69,12 @@ def resolve_style(name: str, brand_overrides: dict | None = None) -> CaptionStyl
     # BackColour box still renders), leaving captions invisible.
     data.update({k: v for k, v in overrides.items() if k in data and v is not None})
     return CaptionStyle(**data)
+
+
+def hex_to_ass(color: str, alpha: int = 0) -> str:
+    """`#RRGGBB` -> ASS `&HAABBGGRR` (alpha 0 = opaque, 255 = transparent)."""
+    h = color.lstrip("#")
+    if len(h) != 6:
+        raise ValueError(f"expected #RRGGBB, got {color!r}")
+    r, g, b = h[0:2], h[2:4], h[4:6]
+    return f"&H{alpha:02X}{b}{g}{r}".upper()

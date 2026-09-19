@@ -27,8 +27,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from video_edit_agent.core.schemas import EDL, TransitionType
-from video_edit_agent.editorial.punch_in import ZOOM_ANCHOR_Y
 from video_edit_agent.render.color import safe_format_filter
+from video_edit_agent.render.reframe import reframe_filters, resolve_reframe
 
 
 @dataclass
@@ -97,14 +97,18 @@ def build_filter_complex(plan: RenderPlan) -> tuple[list[str], str, str]:
         if speed != 1.0:
             vf += f",setpts={1 / speed:.6f}*PTS"
         vf += f",{fmt}"
-        if clip.zoom and clip.zoom != 1.0:
-            crop_w = round(edl.width / clip.zoom / 2) * 2
-            crop_h = round(edl.height / clip.zoom / 2) * 2
-            crop_x = (edl.width - crop_w) // 2
-            crop_y = round((edl.height - crop_h) * ZOOM_ANCHOR_Y)
-            vf += f",crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale={edl.width}:{edl.height}:flags=lanczos,setsar=1"
-        vf += f"[{v_label}]"
-        filters.append(vf)
+        reframe = resolve_reframe(clip)
+        if reframe is None:
+            vf += f"[{v_label}]"
+            filters.append(vf)
+        else:
+            # The punch-in/reframe is the shared implementation in
+            # render/reframe.py -- the same one every micro-preview renders.
+            framed = f"fr{i}"
+            filters.append(vf + f"[{framed}]")
+            filters.extend(reframe_filters(
+                reframe, framed, v_label, edl.width, edl.height, edl.fps, clip.duration, str(i),
+            ))
 
         af = (
             f"[{src_idx}:a]atrim=start={clip.source_in:.3f}:end={clip.source_out:.3f},"

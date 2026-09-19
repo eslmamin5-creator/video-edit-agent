@@ -104,6 +104,24 @@ def test_timeline_review_reflects_broll_and_cut_reason():
     assert review.items[0].broll_description == "chart"
 
 
+def test_timeline_review_shows_editorial_treatment_instead_of_fake_broll():
+    edl = EDL(
+        version=1, fps=30.0, width=1080, height=1920,
+        clips=[EDLClip(source_file="a.mp4", source_in=0.0, source_out=5.0, timeline_in=0.0, timeline_out=5.0)],
+    )
+    broll = [
+        BrollPlanItem(
+            timeline_start=1.0, timeline_end=3.0, purpose="emphasis", spoken_concept="growth",
+            recommended_visual="growth", source=BrollSourceKind.NONE, treatment="punch_in",
+        )
+    ]
+    review = build_timeline_review(edl, _transcript(), broll, [])
+    item = review.items[0]
+    assert item.mode == "talking_head"
+    assert item.editorial_treatment == "punch_in"
+    assert item.broll_description is None
+
+
 def test_timeline_review_marks_cta_present_for_real_animation_kind_enum():
     """Regression test: `AnimationKind` is a `str, Enum` mixin, so
     `str(AnimationKind.CTA)` is "AnimationKind.CTA" (Enum's __str__), not

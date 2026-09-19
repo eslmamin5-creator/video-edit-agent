@@ -14,7 +14,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from video_edit_agent.captions.chunking import CaptionChunk, chunk_words
-from video_edit_agent.captions.rtl import rtl_override_tags
+from video_edit_agent.captions.phrasing import phrase_break_index
+from video_edit_agent.captions.rtl import wrap_rtl
 from video_edit_agent.captions.safe_zone import SafeZone, margins_px
 from video_edit_agent.captions.styles import CaptionStyle
 from video_edit_agent.captions.word_highlight import build_karaoke_text
@@ -58,6 +59,10 @@ def _fmt_srt_time(t: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
+# Style `Encoding` is -1 (libass: detect the paragraph direction from the text):
+# libass takes the BiDi base direction from it, and the usual 1 forces
+# left-to-right, which lays a code-switched Arabic line out in the wrong order
+# as soon as the line carries karaoke override tags.
 ASS_HEADER_TEMPLATE = """[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -67,11 +72,29 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font},{size},{primary},{highlight},{outline_color},{back},{bold},0,0,0,100,100,0,0,3,{outline},{shadow},2,{margin_l},{margin_r},{margin_v},1
+Style: Default,{font},{size},{primary},{highlight},{outline_color},{back},{bold},0,0,0,100,100,0,0,{border_style},{outline},{shadow},2,{margin_l},{margin_r},{margin_v},-1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
+
+
+_BOX_BACKGROUNDS = ("box", "brand_box")
+
+
+def balanced_break_index(words: list, max_line_chars: int) -> int | None:
+    """Index of the word that should start the second line when a chunk is
+    longer than `max_line_chars`, or None when no split is needed/possible.
+    Phrase-aware (see `captions/phrasing.py`): it avoids splitting tightly
+    connected phrases and falls back to a width-balanced split otherwise."""
+    return phrase_break_index(words, max_line_chars)
+
+
+def caption_chunks(transcript: Transcript, edl: EDL, style: CaptionStyle) -> list[CaptionChunk]:
+    """The timeline-axis caption chunks the ASS file is built from (also used
+    by the review preview to pick real caption moments)."""
+    words = _remap_words_to_timeline(transcript, edl)
+    return chunk_words(words, max_chars=style.max_chars_per_line, max_duration=3.2)
 
 
 def build_ass(
@@ -84,13 +107,20 @@ def build_ass(
 ) -> str:
     safe_zone = safe_zone or SafeZone()
     margins = margins_px(safe_zone, edl.width, edl.height)
-    words = _remap_words_to_timeline(transcript, edl)
-    chunks: list[CaptionChunk] = chunk_words(words, max_chars=style.max_chars_per_line, max_duration=3.2)
+    chunks = caption_chunks(transcript, edl, style)
 
+    # ASS karaoke paints a word with SecondaryColour until it is spoken and
+    # PrimaryColour afterwards. Upcoming words must stay in the text color and
+    # turn to the highlight as they are spoken, so a karaoke style swaps the two.
+    primary, secondary = (
+        (style.highlight_color, style.primary_color) if style.word_highlight
+        else (style.primary_color, style.highlight_color)
+    )
     header = ASS_HEADER_TEMPLATE.format(
         width=edl.width, height=edl.height, font=style.font_ar, size=style.font_size,
-        primary=style.primary_color, highlight=style.highlight_color, outline_color=style.outline_color,
-        back=style.back_color, bold=-1 if style.bold else 0, outline=style.outline, shadow=style.shadow,
+        primary=primary, highlight=secondary, outline_color=style.outline_color,
+        back=style.back_color, bold=-1 if style.bold else 0,
+        border_style=3 if style.background in _BOX_BACKGROUNDS else 1, outline=style.outline, shadow=style.shadow,
         margin_l=margins["left"], margin_r=margins["right"], margin_v=margins["bottom"],
     )
 
@@ -98,13 +128,20 @@ def build_ass(
     for chunk in chunks:
         if chunk.end <= chunk.start:
             continue
+        break_at = balanced_break_index(chunk.words, style.line_break_chars)
         if style.word_highlight:
-            text = build_karaoke_text(chunk, style)
+            text = build_karaoke_text(chunk, style, break_before=break_at)
+        elif break_at is not None:
+            text = (
+                " ".join(w.word for w in chunk.words[:break_at])
+                + "\\N"
+                + " ".join(w.word for w in chunk.words[break_at:])
+            )
         else:
             # Raw logical-order text: this project's libass build (HarfBuzz +
             # FriBidi) shapes and reorders it itself -- see captions/rtl.py.
             text = chunk.text
-        text = rtl_override_tags(chunk.text) + text
+        text = wrap_rtl(text, chunk.text)
         events.append(
             f"Dialogue: 0,{_fmt_ass_time(chunk.start)},{_fmt_ass_time(chunk.end)},Default,,0,0,0,,{text}"
         )

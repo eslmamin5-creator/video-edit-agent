@@ -78,6 +78,37 @@ class TransitionType(str, Enum):
     DIP_TO_BLACK = "dip_to_black"
 
 
+# Fraction of the cropped-away height placed above the crop window when a clip
+# is punched in (0.30 keeps a head-and-shoulders subject in frame).
+DEFAULT_ZOOM_ANCHOR_Y = 0.30
+
+
+class ZoomRamp(BaseModel):
+    """One eased zoom move inside a clip: the zoom eases to `zoom_to` between
+    `start_s` and `end_s` (clip-local seconds; either may fall outside the
+    clip, so a ramp centred on a cut is split across both neighbours)."""
+
+    start_s: float
+    end_s: float
+    zoom_to: float
+    easing: str = "smoothstep"  # smoothstep | linear
+
+
+class Reframe(BaseModel):
+    """The single transform description shared by the final render and every
+    preview: zoom starts at `zoom_start`, is moved by `ramps` in order, and is
+    framed on the anchor point. `face_box` (normalized x, y, w, h of the
+    subject's face in the full frame) keeps the face inside the crop window.
+    """
+
+    zoom_start: float = 1.0
+    ramps: list[ZoomRamp] = Field(default_factory=list)
+    anchor_x: float = 0.5
+    anchor_y: float = DEFAULT_ZOOM_ANCHOR_Y
+    face_box: tuple[float, float, float, float] | None = None
+    face_margin: float = 0.04
+
+
 class EDLClip(BaseModel):
     """One clip in the Edit Decision List (spec section 12)."""
 
@@ -112,6 +143,9 @@ class EDLClip(BaseModel):
     # ported from `majedphotos/video-ad-editor`'s `scripts/03_cut_zoom.py`).
     # 1.0 means no zoom. See `editorial/punch_in.py::plan_punch_ins`.
     zoom: float = 1.0
+    # Time-varying reframe for this clip (eased punch-in ramps, anchor and
+    # face-safe framing). When None the clip uses the static `zoom` above.
+    reframe: Reframe | None = None
     overlay_refs: list[str] = Field(default_factory=list)
     caption_refs: list[str] = Field(default_factory=list)
     broll_refs: list[str] = Field(default_factory=list)
@@ -161,6 +195,13 @@ class BrollPlanItem(BaseModel):
     crop_behavior: str = "center_crop"
     transition: TransitionType = TransitionType.CROSSFADE
     confidence: float = 0.0
+    # Editorial decision (see broll/treatment.py). None = not yet decided, in
+    # which case the slot is treated as a plain B-roll candidate.
+    treatment: str | None = None
+    treatment_reason: str | None = None
+    visual_concept: str | None = None
+    source_recommendation: str | None = None
+    generate_later: bool = False
 
 
 # --------------------------------------------------------------------------

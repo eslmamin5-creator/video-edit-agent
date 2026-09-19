@@ -81,15 +81,20 @@ def edit(
     no_motion: bool = typer.Option(False, "--no-motion"),
     yes: bool = typer.Option(
         False, "--yes", "--no-review",
-        help="Skip the review gate and render immediately (Review-First Editing Workflow bypass).",
+        help="Skip the review gate and render immediately (explicit, recorded bypass of the review-first default).",
+    ),
+    logo_mode: str | None = typer.Option(
+        None, "--logo-mode",
+        help="Override the Brand Profile logo mode: none|intro|end_card|intro_and_end|persistent_bug.",
     ),
 ):
     """Run the full editing pipeline on a single source video.
 
-    By default this stops before the final render and writes review
-    artifacts (transcript, caption preview, brand summary, timeline, B-roll,
-    preview frames) under `edit/review/` for inspection -- pass `--yes` (or
-    `--no-review`) to skip straight to a full render instead."""
+    Review-first is the default: until the project's review is approved
+    (`videoedit review-approve`), this stops before any expensive work and
+    writes review artifacts (transcript, caption preview, brand summary,
+    timeline, B-roll plan, preview frames) under `edit/review/`. Pass `--yes`
+    (or `--no-review`) to deliberately bypass the gate and render."""
     lang = _lang()
     console.print(t("analyzing_video", lang))
 
@@ -120,7 +125,8 @@ def edit(
         enable_broll=not no_broll,
         enable_motion=not no_motion,
         on_progress=on_progress,
-        review=not yes,
+        review=False if yes else None,
+        logo_mode=logo_mode,
     )
 
     if not result.ready_for_final_render and result.review_dir is not None:
@@ -130,11 +136,13 @@ def edit(
         console.print(" - caption_preview.json    (caption style)")
         console.print(" - brand_summary.json      (brand colors/logo/CTA)")
         console.print(" - timeline_review.json    (edit/cut/B-roll/motion plan)")
-        console.print(" - broll_review.json       (selected B-roll)")
+        console.print(" - broll_review.json       (per-slot B-roll treatment; nothing generated yet)")
+        console.print(" - transcript_corrections.json (created by `videoedit review-correct`)")
         console.print(" - contact_sheet.jpg / frames/  (representative preview frames)")
         console.print(
-            f"Once you're satisfied, run [bold]videoedit review-approve {result.project_dir}[/bold] "
-            f"then re-run [bold]videoedit edit {video} --yes[/bold] to render, "
+            f"Fix words with [bold]videoedit review-correct {result.project_dir} SEGMENT_ID \"text\"[/bold]; "
+            f"once satisfied run [bold]videoedit review-approve {result.project_dir}[/bold] "
+            f"then re-run [bold]videoedit edit {video}[/bold] to render, "
             "or re-run this command with --yes to skip review entirely."
         )
         if result.warnings:
@@ -160,8 +168,61 @@ def review_approve(
     First Editing Workflow spec section 8). Re-run `videoedit edit ... --yes`
     afterwards to actually render."""
     review_dir = project_dir / "review" if project_dir.name != "review" else project_dir
-    state = review_state.approve(review_dir, note="approved via `videoedit review-approve`")
+    try:
+        state = review_state.approve(review_dir, note="approved via `videoedit review-approve`")
+    except review_state.UnresolvedReviewItems as exc:
+        console.print(f"[red]Not approved: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
     console.print(f"Approved. ready_for_final_render={state.ready_for_final_render}")
+
+
+@app.command(name="review-flag")
+def review_flag(
+    project_dir: Path = typer.Argument(..., exists=True, help="The edit/ project directory."),
+    segment_id: str = typer.Argument(..., help="Transcript segment id to keep open for the user."),
+    reason: str = typer.Option("", "--reason", help="Why the segment is unresolved."),
+    asr_text: str = typer.Option("", "--asr-text", help="The raw ASR text, for the reviewer's reference."),
+    segment: int | None = typer.Option(None, "--segment", help="1-based segment number."),
+):
+    """Keep a transcript segment visibly unresolved; approval is refused
+    until it is corrected (`review-correct`) or resolved (`review-resolve`)."""
+    from video_edit_agent.review.schemas import UnresolvedTranscriptItem
+
+    review_dir = project_dir / "review" if project_dir.name != "review" else project_dir
+    state = review_state.flag_unresolved(
+        review_dir,
+        UnresolvedTranscriptItem(segment_id=segment_id, segment=segment, asr_text=asr_text, reason=reason),
+    )
+    console.print(f"{len(state.unresolved_transcript)} unresolved transcript segment(s).")
+
+
+@app.command(name="review-resolve")
+def review_resolve(
+    project_dir: Path = typer.Argument(..., exists=True, help="The edit/ project directory."),
+    segment_id: str = typer.Argument(..., help="Transcript segment id the user has confirmed as-is."),
+):
+    """Close an unresolved transcript item without changing its text."""
+    review_dir = project_dir / "review" if project_dir.name != "review" else project_dir
+    state = review_state.resolve_unresolved(review_dir, segment_id)
+    console.print(f"{len(state.unresolved_transcript)} unresolved transcript segment(s) remain.")
+
+
+@app.command(name="review-correct")
+def review_correct(
+    project_dir: Path = typer.Argument(..., exists=True, help="The edit/ project directory."),
+    segment_id: str = typer.Argument(..., help="Transcript segment id (see transcript_review.json)."),
+    text: str = typer.Argument(..., help="Corrected text for the segment (or for one word with --word)."),
+    word: int | None = typer.Option(None, "--word", help="0-based word index: replace only that word."),
+):
+    """Persist a transcript correction in project state. Timing is preserved;
+    re-run `videoedit edit` to regenerate the review artifacts."""
+    from video_edit_agent.review.corrections import add_correction
+    from video_edit_agent.review.schemas import TranscriptCorrection
+
+    review_dir = project_dir / "review" if project_dir.name != "review" else project_dir
+    saved = add_correction(review_dir, TranscriptCorrection(segment_id=segment_id, corrected_text=text, word_index=word))
+    review_state.resolve_unresolved(review_dir, segment_id)  # a confirmed correction closes its flag
+    console.print(f"Saved. {len(saved)} correction(s) stored in {review_dir}")
 
 
 @app.command()

@@ -1,7 +1,6 @@
-"""Regression tests for the generic "Learn more" CTA bug (Review-First
-Editing Workflow spec section 11 item D): `build_motion_plan`'s CTA spec must
-never rely on Remotion's own hardcoded English `defaultProps.actionLabel`,
-and must never silently show English text on Arabic-language content."""
+"""CTA policy: a call to action is NONE by default. `build_motion_plan` never
+invents CTA text (no language default, no Remotion `defaultProps.actionLabel`);
+a CTA appears only when the caller or the Brand Profile provides its text."""
 from __future__ import annotations
 
 from video_edit_agent.brand.schema import Brand
@@ -22,34 +21,29 @@ def _edl(duration: float = 10.0) -> EDL:
     )
 
 
-def _cta_spec(specs):
-    ctas = [s for s in specs if s.kind == AnimationKind.CTA]
-    assert len(ctas) == 1
-    return ctas[0]
+def _ctas(specs):
+    return [s for s in specs if s.kind == AnimationKind.CTA]
 
 
-def test_cta_defaults_to_arabic_text_for_arabic_transcripts():
-    spec = _cta_spec(build_motion_plan(_edl(), _transcript("ar"), brand=None))
-    assert spec.text
-    assert spec.text != "Learn more"
-    assert spec.extra.get("actionLabel") == spec.text
+def test_no_cta_by_default_for_any_language():
+    for language in ("ar", "en", "auto"):
+        assert _ctas(build_motion_plan(_edl(), _transcript(language), brand=None)) == []
 
 
-def test_cta_defaults_to_english_text_for_non_arabic_transcripts():
-    spec = _cta_spec(build_motion_plan(_edl(), _transcript("en"), brand=None))
-    assert spec.text == "Learn more"
-    assert spec.extra.get("actionLabel") == "Learn more"
+def test_brand_without_cta_text_yields_no_cta():
+    assert _ctas(build_motion_plan(_edl(), _transcript("ar"), brand=Brand(name="acme"))) == []
 
 
-def test_cta_prefers_brand_text_default_over_language_default():
+def test_cta_uses_brand_text_when_explicitly_configured():
     brand = Brand(name="acme")
     brand.cta.text_default = "اطلب الآن"
-    spec = _cta_spec(build_motion_plan(_edl(), _transcript("ar"), brand=brand))
+    (spec,) = _ctas(build_motion_plan(_edl(), _transcript("ar"), brand=brand))
     assert spec.text == "اطلب الآن"
     assert spec.extra.get("actionLabel") == "اطلب الآن"
 
 
-def test_cta_never_has_empty_text():
-    for language in ("ar", "en", "auto"):
-        spec = _cta_spec(build_motion_plan(_edl(), _transcript(language), brand=None))
-        assert spec.text.strip() != ""
+def test_explicit_cta_text_wins_over_brand_text():
+    brand = Brand(name="acme")
+    brand.cta.text_default = "brand text"
+    (spec,) = _ctas(build_motion_plan(_edl(), _transcript("en"), brand=brand, cta_text="explicit"))
+    assert spec.text == "explicit"

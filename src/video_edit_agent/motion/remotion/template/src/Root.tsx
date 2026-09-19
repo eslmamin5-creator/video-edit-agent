@@ -81,7 +81,7 @@ export const RemotionRoot: React.FC = () => {
         durationInFrames={DEFAULT_DURATION}
         fps={FPS}
         {...DEFAULT_SIZE}
-        defaultProps={{ text: "Call to action", actionLabel: "Learn more", theme: defaultTheme }}
+        defaultProps={{ text: "", actionLabel: "", theme: defaultTheme }}
       />
       <Composition
         id="logo-reveal"

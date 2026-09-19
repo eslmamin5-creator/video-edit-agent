@@ -11,7 +11,9 @@ export type BrandTheme = {
 export const defaultTheme: BrandTheme = {
   primary: "#111111",
   secondary: "#FFFFFF",
-  accent: "#FFCC00",
+  // Neutral: the Brand Profile supplies the real accent. Never a strong
+  // arbitrary color here.
+  accent: "#FFFFFF",
   fontFamily: "Arial, 'Segoe UI', sans-serif",
   rtl: false,
 };

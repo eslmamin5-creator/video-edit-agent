@@ -57,6 +57,18 @@ def resolve_logo_path(name: str | None, root: Path | None = None) -> Path | None
     return candidates[0] if candidates else None
 
 
+def resolve_brand_logo(brand: Brand, root: Path | None = None) -> Path | None:
+    """The logo file the active Brand Profile points at: its explicit
+    `logo.asset` (relative to `brands/<name>/`, or absolute) when set and
+    present, otherwise the first image in `brands/<name>/logos/`."""
+    if brand.logo.asset:
+        candidate = Path(brand.logo.asset)
+        if not candidate.is_absolute():
+            candidate = brand_dir(brand.name, root) / candidate
+        return candidate if candidate.is_file() else None
+    return resolve_logo_path(brand.name, root)
+
+
 _FONT_EXTENSIONS = (".ttf", ".otf", ".ttc")
 
 

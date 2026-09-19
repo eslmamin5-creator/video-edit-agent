@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from video_edit_agent.captions.engine import balanced_break_index
 from video_edit_agent.core.media import run
 from video_edit_agent.core.schemas import EDL, MotionPlanItem
 from video_edit_agent.render.composition import RenderPlan, build_filter_complex
@@ -21,8 +22,33 @@ class PreviewFrameError(RuntimeError):
     pass
 
 
+def pick_caption_timestamps(chunks: list, line_break_chars: int, word_highlight: bool) -> dict[str, float]:
+    """Picks real caption moments from the actual chunks: a single-line
+    caption, a caption the line balancer splits over two lines, and (when
+    word highlighting is on) one late in a chunk so several words are already
+    highlighted. Labels are skipped when no chunk qualifies."""
+    picks: dict[str, float] = {}
+    usable = [c for c in chunks if c.end > c.start and len(c.words) >= 2]
+    multi = next((c for c in usable if len(c.words) >= 4 and balanced_break_index(c.words, line_break_chars) is not None), None)
+    if multi is not None:
+        picks["caption_multiline"] = multi.start + 0.6 * (multi.end - multi.start)
+    # Prefer a chunk that fits on one line; if the line balancer splits every
+    # chunk, fall back to the shortest one so a "normal" frame still exists.
+    rest = [c for c in usable if c is not multi]
+    singles = [c for c in rest if balanced_break_index(c.words, line_break_chars) is None]
+    normal = singles[len(singles) // 3] if singles else min(rest, key=lambda c: len(c.text), default=None)
+    if normal is not None:
+        picks["caption_normal"] = normal.start + 0.15 * (normal.end - normal.start)
+    if word_highlight:
+        pool = [c for c in rest if c is not normal and len(c.words) >= 3]
+        highlight = pool[len(pool) // 2] if pool else None
+        if highlight is not None:
+            picks["caption_highlight"] = highlight.start + 0.65 * (highlight.end - highlight.start)
+    return picks
+
+
 def pick_representative_timestamps(
-    edl: EDL, motion_plan: list[MotionPlanItem], broll_plan: list, transcript
+    edl: EDL, motion_plan: list[MotionPlanItem], broll_plan: list, transcript, caption_picks: dict[str, float] | None = None
 ) -> dict[str, float]:
     """Chooses one timestamp per interesting moment (spec section 6's list:
     hook, normal caption, mixed-language caption, logo, punch-in, B-roll,
@@ -41,8 +67,10 @@ def pick_representative_timestamps(
             break
 
     for item in broll_plan:
-        picks.setdefault("broll", (item.timeline_start + item.timeline_end) / 2)
-        break
+        # Only slots that will actually cut away to footage get a B-roll frame.
+        if getattr(item, "treatment", None) in (None, "local_broll", "generated_broll"):
+            picks.setdefault("broll", (item.timeline_start + item.timeline_end) / 2)
+            break
 
     for m in motion_plan:
         kind = m.spec.kind.value if hasattr(m.spec.kind, "value") else str(m.spec.kind)
@@ -59,9 +87,12 @@ def pick_representative_timestamps(
     words = transcript.words if transcript is not None else []
     has_arabic = any(any("؀" <= ch <= "ۿ" for ch in w.word) for w in words)
     has_latin = any(any("a" <= ch.lower() <= "z" for ch in w.word) for w in words)
-    if has_arabic:
+    if caption_picks:
+        # Real caption moments replace the generic proportional guess.
+        picks.update(caption_picks)
+    elif has_arabic:
         picks.setdefault("caption_ar", min(total - 0.1, total * 0.3) if total > 0.2 else 0.0)
-    if has_arabic and has_latin:
+    if has_arabic and has_latin and not caption_picks:
         picks.setdefault("caption_mixed", min(total - 0.1, total * 0.6) if total > 0.2 else 0.0)
 
     return picks
