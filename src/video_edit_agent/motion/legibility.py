@@ -187,6 +187,15 @@ def _worst_contrast(fg_lum: float, backdrop: tuple[float, float, float], plate_l
     return worst
 
 
+def brand_safe_zone(brand: Brand) -> SafeZone:
+    """The safe zone a Brand Profile asks for (defaults where it is silent)."""
+    return SafeZone(
+        top_pct=brand.safe_zones.get("top", SafeZone().top_pct),
+        bottom_pct=brand.safe_zones.get("bottom", SafeZone().bottom_pct),
+        side_pct=brand.safe_zones.get("side", SafeZone().side_pct),
+    )
+
+
 def plan_title_treatment(
     brand: Brand,
     text: str,
@@ -202,11 +211,7 @@ def plan_title_treatment(
     grids) is optional; without it the title goes in the top safe band on a
     brand plate, because a backdrop nobody has looked at cannot be trusted."""
     reasons: list[str] = []
-    safe = safe_zone or SafeZone(
-        top_pct=brand.safe_zones.get("top", SafeZone().top_pct),
-        bottom_pct=brand.safe_zones.get("bottom", SafeZone().bottom_pct),
-        side_pct=brand.safe_zones.get("side", SafeZone().side_pct),
-    )
+    safe = safe_zone or brand_safe_zone(brand)
     max_width = round(canvas_w * (1.0 - 2 * safe.side_pct))
     pad = round(font_px * 0.32)
     palette = _palette(brand)

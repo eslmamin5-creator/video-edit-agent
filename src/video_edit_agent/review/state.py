@@ -8,9 +8,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from video_edit_agent.review import text_copy
 from video_edit_agent.review.schemas import (
+    ApprovalStatus,
+    CopySource,
     ReviewApprovalState,
     ReviewStage,
+    TextTreatmentReview,
     UnresolvedTranscriptItem,
 )
 
@@ -41,6 +45,12 @@ def flag_unresolved(review_dir: Path, item: UnresolvedTranscriptItem) -> ReviewA
     state = load_review_state(review_dir)
     state.unresolved_transcript = [i for i in state.unresolved_transcript if i.segment_id != item.segment_id]
     state.unresolved_transcript.append(item)
+    # Copy taken from the transcript is only as good as the transcript: it goes
+    # back to pending (the approved visual stays); user-supplied copy is untouched.
+    state.text_treatments = [
+        text_copy.pending_again(t) if t.copy_source is CopySource.APPROVED_TRANSCRIPT and item.segment_id in t.source_segment_ids else t
+        for t in state.text_treatments
+    ]
     state.ready_for_final_render = False
     save_review_state(state, review_dir)
     return state
@@ -61,6 +71,10 @@ def approve(review_dir: Path, note: str | None = None) -> ReviewApprovalState:
     if state.unresolved_transcript:
         open_ids = ", ".join(i.segment_id for i in state.unresolved_transcript)
         raise UnresolvedReviewItems(f"unresolved transcript segments remain open: {open_ids}")
+    open_copy = text_copy.blocking_items(state.text_treatments)
+    if open_copy:
+        names = ", ".join(f"{t.treatment} ({t.blocking_reason or 'copy not approved'})" for t in open_copy)
+        raise UnresolvedReviewItems(f"required on-screen copy is not approved: {names}")
     state.stage = ReviewStage.APPROVED
     state.ready_for_final_render = True
     state.broll_generation_approved = True
@@ -90,5 +104,58 @@ def mark_rendered(review_dir: Path, note: str | None = None) -> ReviewApprovalSt
     state.stage = ReviewStage.RENDERED
     if note:
         state.notes.append(note)
+    save_review_state(state, review_dir)
+    return state
+
+
+# --------------------------------------------------------------------------
+# Text treatments: visual approval and copy approval are separate
+# --------------------------------------------------------------------------
+
+
+def record_text_treatment(review_dir: Path, review: TextTreatmentReview) -> ReviewApprovalState:
+    """Upserts the planner's record of one treatment. A treatment whose copy is
+    not approved can never leave the state `ready_for_final_render`."""
+    state = load_review_state(review_dir)
+    state.text_treatments = [t for t in state.text_treatments if t.treatment != review.treatment] + [review]
+    if text_copy.blocking_items(state.text_treatments):
+        state.ready_for_final_render = False
+    save_review_state(state, review_dir)
+    return state
+
+
+def _treatment_or_raise(state: ReviewApprovalState, treatment: str) -> TextTreatmentReview:
+    found = state.treatment(treatment)
+    if found is None:
+        raise KeyError(f"no text treatment '{treatment}' in the review state")
+    return found
+
+
+def approve_visual(review_dir: Path, treatment: str, visual_props: dict | None = None) -> ReviewApprovalState:
+    """The user approved how `treatment` looks and moves. Stores the props so a
+    later copy change reuses them; the copy status is not touched."""
+    state = load_review_state(review_dir)
+    current = _treatment_or_raise(state, treatment)
+    update: dict = {"visual_status": ApprovalStatus.APPROVED}
+    if visual_props is not None:
+        update["visual_props"] = visual_props
+    state.text_treatments = [t.model_copy(update=update) if t is current else t for t in state.text_treatments]
+    save_review_state(state, review_dir)
+    return state
+
+
+def submit_copy(
+    review_dir: Path, treatment: str, text: str, source: CopySource = CopySource.USER_SUPPLIED,
+    layout_fit_issue: str | None = None, layout_adjustments: list[str] | None = None,
+) -> ReviewApprovalState:
+    """Approves user-supplied (or explicitly approved rewritten) copy for
+    `treatment`. Only the copy fields change: visual approval is NOT reset, and
+    the transcript is never touched."""
+    state = load_review_state(review_dir)
+    current = _treatment_or_raise(state, treatment)
+    updated = text_copy.with_user_copy(current, text, source).model_copy(update={
+        "layout_fit_issue": layout_fit_issue, "layout_adjustments": list(layout_adjustments or []),
+    })
+    state.text_treatments = [updated if t is current else t for t in state.text_treatments]
     save_review_state(state, review_dir)
     return state

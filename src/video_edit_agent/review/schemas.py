@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 # --------------------------------------------------------------------------
 # Section 1-2: transcript/caption review
@@ -240,6 +240,47 @@ class UnresolvedTranscriptItem(BaseModel):
     reason: str = ""
 
 
+class ApprovalStatus(str, Enum):
+    PENDING_REVIEW = "pending_review"
+    APPROVED = "approved"
+
+
+class CopySource(str, Enum):
+    """The only origins a piece of on-screen copy may have. Raw or unresolved
+    ASR text is not among them."""
+
+    APPROVED_TRANSCRIPT = "approved_transcript"  # transcript text the user has confirmed
+    USER_SUPPLIED = "user_supplied"  # copy typed/pasted by the user
+    APPROVED_REWRITE = "approved_rewrite"  # a rewrite the user explicitly approved
+
+
+class TextTreatmentReview(BaseModel):
+    """Review record of one text-driven motion treatment (a hook title, a
+    lower third, ...). The VISUAL treatment (animation, placement, colour,
+    contrast) and its COPY (the words) are approved independently, so fixing
+    the words never asks the user to re-review the animation."""
+
+    treatment: str  # AnimationKind value, e.g. "hook_title"
+    required: bool = True  # a required treatment with unapproved copy blocks final approval
+    visual_status: ApprovalStatus = ApprovalStatus.PENDING_REVIEW
+    # The approved visual props (placement/colour/plate/outline...), reused
+    # as-is when only the copy changes.
+    visual_props: dict | None = None
+    copy_status: ApprovalStatus = ApprovalStatus.PENDING_REVIEW
+    copy_source: CopySource | None = None
+    approved_copy: str | None = None  # the only text that may reach a final render
+    # Where the proposed copy came from in the transcript (never used as copy
+    # unless those segments are confirmed).
+    source_segment_ids: list[str] = Field(default_factory=list)
+    source_segments: list[int] = Field(default_factory=list)  # 1-based, as in the audio review
+    proposed_asr_text: str = ""  # reference for the reviewer; never rewritten
+    blocking_reason: str | None = None
+    placeholder_text: str | None = None
+    placeholder_used_in_preview: bool = False
+    layout_fit_issue: str | None = None
+    layout_adjustments: list[str] = Field(default_factory=list)
+
+
 class ReviewApprovalState(BaseModel):
     stage: ReviewStage = ReviewStage.ANALYZE
     ready_for_final_render: bool = False
@@ -250,3 +291,17 @@ class ReviewApprovalState(BaseModel):
     # refused while any remain (see review.state.approve).
     unresolved_transcript: list[UnresolvedTranscriptItem] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+    # Per-treatment visual/copy approval (see TextTreatmentReview).
+    text_treatments: list[TextTreatmentReview] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def hook_copy_status(self) -> str | None:
+        """`copy_status` of the hook title (None when the plan has no hook)."""
+        for t in self.text_treatments:
+            if t.treatment == "hook_title":
+                return t.copy_status.value
+        return None
+
+    def treatment(self, name: str) -> TextTreatmentReview | None:
+        return next((t for t in self.text_treatments if t.treatment == name), None)

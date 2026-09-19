@@ -225,6 +225,56 @@ def review_correct(
     console.print(f"Saved. {len(saved)} correction(s) stored in {review_dir}")
 
 
+@app.command(name="review-approve-visual")
+def review_approve_visual(
+    project_dir: Path = typer.Argument(..., exists=True, help="The edit/ project directory."),
+    treatment: str = typer.Argument("hook_title", help="Text treatment whose look/animation is approved."),
+):
+    """Approve how a text treatment (e.g. the hook title) looks and moves,
+    independently of its wording. The planned props are stored so a later copy
+    change reuses them instead of redesigning the treatment."""
+    import json
+
+    review_dir = project_dir / "review" if project_dir.name != "review" else project_dir
+    plan_path = review_dir.parent / "motion_plan.json"
+    props = None
+    if plan_path.exists():
+        for item in json.loads(plan_path.read_text(encoding="utf-8")):
+            spec = item.get("spec", item)
+            if spec.get("kind") == treatment and spec.get("extra"):
+                props = spec["extra"]
+                break
+    try:
+        review_state.approve_visual(review_dir, treatment, props)
+    except KeyError as exc:
+        console.print(f"[red]{exc.args[0]}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"Visual treatment '{treatment}' approved (copy status unchanged).")
+
+
+@app.command(name="review-copy")
+def review_copy(
+    project_dir: Path = typer.Argument(..., exists=True, help="The edit/ project directory."),
+    text: str = typer.Argument(..., help="The approved on-screen copy, used exactly as given."),
+    treatment: str = typer.Option("hook_title", "--treatment", help="Text treatment the copy is for."),
+    rewrite: bool = typer.Option(False, "--rewrite", help="Mark the copy as an approved rewrite (default: user-supplied)."),
+):
+    """Approve on-screen copy for a text treatment. Replaces the REVIEW
+    placeholder without resetting the treatment's visual approval; the
+    transcript is never modified."""
+    from video_edit_agent.review.schemas import CopySource
+
+    review_dir = project_dir / "review" if project_dir.name != "review" else project_dir
+    try:
+        review_state.submit_copy(
+            review_dir, treatment, text, CopySource.APPROVED_REWRITE if rewrite else CopySource.USER_SUPPLIED,
+        )
+    except (KeyError, ValueError) as exc:
+        console.print(f"[red]{exc.args[0]}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"Copy for '{treatment}' approved. Re-run the review to regenerate its preview.")
+
+
 @app.command()
 def create(
     script: Path = typer.Argument(..., exists=True, help="Path to the source script (.txt/.md/.docx/.pdf)."),

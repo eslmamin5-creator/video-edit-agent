@@ -34,7 +34,7 @@ from video_edit_agent.editorial.edl import validate as validate_edl
 from video_edit_agent.editorial.packer import write_takes_packed
 from video_edit_agent.editorial.planner import build_edl
 from video_edit_agent.editorial.punch_in import plan_punch_ins
-from video_edit_agent.motion.director import build_motion_plan
+from video_edit_agent.motion.director import build_motion_plan, plan_hook
 from video_edit_agent.motion.router import render_motion
 from video_edit_agent.qa.brand import run_brand_qa
 from video_edit_agent.qa.language import run_language_qa
@@ -61,7 +61,12 @@ from video_edit_agent.review.preview import (
     pick_caption_timestamps,
     pick_representative_timestamps,
 )
-from video_edit_agent.review.schemas import PreviewFrame, ReviewApprovalState, ReviewStage
+from video_edit_agent.review.schemas import (
+    PreviewFrame,
+    ReviewApprovalState,
+    ReviewStage,
+    TextTreatmentReview,
+)
 from video_edit_agent.subject.compositor import (
     find_enclosing_clip,
     render_subject_cutout,
@@ -89,6 +94,13 @@ class PipelineResult:
     # False and `final_output` is None -- no expensive render has occurred.
     ready_for_final_render: bool = True
     review_dir: Path | None = None
+
+
+def _merged_text_treatments(approval: ReviewApprovalState, hook_review: TextTreatmentReview | None) -> list[TextTreatmentReview]:
+    """The state's text treatments with this run's hook record swapped in (its
+    visual approval and user-supplied copy were carried over by `plan_hook`)."""
+    kept = [t for t in approval.text_treatments if hook_review is None or t.treatment != hook_review.treatment]
+    return kept + ([hook_review] if hook_review is not None else [])
 
 
 def _planned_motion_labels(
@@ -306,6 +318,7 @@ def run_pipeline(
 
     # 7. Motion graphics (graceful: falls back to `simple` engine, spec section 17/43)
     motion_items: list[MotionPlanItem] = []
+    hook_review = None
     # B-roll overlays go in first so motion graphics / behind-subject cutouts
     # draw on top of them, matching the Creator workflow's layer ordering
     # (agents/creator/render.py: "B-roll drawn first ... motion graphics
@@ -316,7 +329,16 @@ def run_pipeline(
     if enable_motion:
         progress("motion")
         try:
-            specs = build_motion_plan(edl, transcript, brand=brand, analysis=footage)
+            # Hook copy is gated by the copy-approval rule: unresolved ASR never
+            # becomes hook copy (placeholder in review, no copy layer in a final render).
+            hook_plan = plan_hook(edl, transcript, brand, footage, approval, for_final_render=not plan_only)
+            specs = build_motion_plan(edl, transcript, brand=brand, analysis=footage, hook=hook_plan)
+            hook_review = hook_plan.review
+            if hook_plan.spec is None and hook_plan.review is not None:
+                warnings.append(
+                    f"Hook title omitted from the final render: copy is {hook_plan.review.copy_status.value} "
+                    f"({hook_plan.review.blocking_reason})"
+                )
         except Exception as exc:  # noqa: BLE001
             specs = []
             warnings.append(f"Motion planning skipped: {exc}")
@@ -485,6 +507,7 @@ def run_pipeline(
                 stage=ReviewStage.REVIEW_VISUALS,
                 ready_for_final_render=False,
                 unresolved_transcript=approval.unresolved_transcript,
+                text_treatments=_merged_text_treatments(approval, hook_review),
             ),
             review_dir,
         )

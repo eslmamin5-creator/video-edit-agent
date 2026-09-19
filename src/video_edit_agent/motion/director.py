@@ -8,10 +8,13 @@ as "no motion graphics for this project", not a hard failure.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from video_edit_agent.brand.schema import Brand
 from video_edit_agent.core.schemas import EDL, AnimationKind, AnimationSpec, Transcript
-from video_edit_agent.motion.legibility import plan_title_treatment
+from video_edit_agent.motion.legibility import brand_safe_zone, plan_title_treatment
+from video_edit_agent.review import text_copy
+from video_edit_agent.review.schemas import ApprovalStatus, ReviewApprovalState, TextTreatmentReview
 from video_edit_agent.subject.framing import FrameAnalysis
 
 _NUMBER_RE = re.compile(r"\b(\d[\d,]*\.?\d*%?)\b")
@@ -38,13 +41,77 @@ def _hook_extra(brand: Brand | None, text: str, edl: EDL, analysis: FrameAnalysi
     }}
 
 
+_HOOK_WINDOW_S = 4.0
+_HOOK_MAX_WORDS = 8
+
+
+@dataclass
+class HookPlan:
+    """The hook title slot plus its copy-approval record (see
+    `review/text_copy.py`). `spec` carries the approved copy, or the marked
+    REVIEW placeholder while the copy is pending; `spec` is None when there is
+    nothing to show (no spoken words, or a final render whose copy is unapproved)."""
+
+    spec: AnimationSpec | None
+    review: TextTreatmentReview | None
+
+
+def plan_hook(
+    edl: EDL, transcript: Transcript, brand: Brand | None = None, analysis: FrameAnalysis | None = None,
+    review_state: ReviewApprovalState | None = None, *, for_final_render: bool = False,
+) -> HookPlan:
+    """Plans the hook title. The words come from the first spoken clause, but
+    they become on-screen copy only through the copy-approval rule: while the
+    segments behind them are unresolved, the slot keeps its visual plan, shows a
+    REVIEW placeholder in previews, and is dropped from a final render. Copy the
+    user supplied (stored in `review_state`) replaces the placeholder and reuses
+    the approved visual props, re-fitting only if the new words no longer fit."""
+    if not edl.clips:
+        return HookPlan(None, None)
+    state = review_state or ReviewApprovalState()
+    first_clip = edl.clips[0]
+    window = text_copy.words_with_segments(transcript, first_clip.source_in, first_clip.source_in + _HOOK_WINDOW_S)[:_HOOK_MAX_WORDS]
+    proposed = " ".join(w for w, _ in window).strip()
+    segment_ids = list(dict.fromkeys(sid for _, sid in window))
+    existing = state.treatment(text_copy.HOOK_TREATMENT)
+    if not proposed and not (existing and existing.approved_copy):
+        return HookPlan(None, None)
+
+    decision = text_copy.decide_copy(
+        text_copy.HOOK_TREATMENT, proposed, segment_ids, unresolved=state.unresolved_transcript, existing=existing,
+        source_segments=text_copy.segment_numbers(transcript, segment_ids, state.unresolved_transcript),
+    )
+    review = decision.review
+    if for_final_render and decision.final_text is None:
+        return HookPlan(None, review)  # never lock unapproved wording into the final render
+
+    text = decision.preview_text
+    if brand is None:
+        extra: dict = {}
+    elif review.visual_status is ApprovalStatus.APPROVED and review.visual_props:
+        # Copy-only change: the approved look is reused, not redesigned.
+        fit = text_copy.refit_copy(
+            review.visual_props, text, edl.width, edl.height, safe_zone=brand_safe_zone(brand),
+        )
+        extra = fit.props
+        review = review.model_copy(update={"layout_fit_issue": fit.issue, "layout_adjustments": fit.adjusted or []})
+    else:
+        extra = _hook_extra(brand, text, edl, analysis)
+    spec = AnimationSpec(
+        kind=AnimationKind.HOOK_TITLE, timeline_start=0.0, timeline_end=min(3.0, edl.total_duration), text=text,
+        extra=extra,
+    )
+    return HookPlan(spec, review)
+
+
 def build_motion_plan(
     edl: EDL, transcript: Transcript, brand: Brand | None = None, cta_text: str | None = None,
-    analysis: FrameAnalysis | None = None,
+    analysis: FrameAnalysis | None = None, hook: HookPlan | None = None,
 ) -> list[AnimationSpec]:
     """Propose a small, high-confidence set of motion graphic slots:
 
-    - a `hook_title` in the opening seconds, using the first spoken clause
+    - a `hook_title` in the opening seconds (`plan_hook`; its copy is gated by the
+      copy-approval rule: unresolved ASR is never promoted to hook copy)
     - a `lower_third` whenever the active speaker changes
     - up to `_MAX_STAT_SLOTS` `stat_counter` slots where a number is spoken
     - a closing `cta` in the final seconds -- ONLY when CTA text was explicitly
@@ -58,19 +125,9 @@ def build_motion_plan(
 
     total_duration = edl.total_duration
 
-    first_clip = edl.clips[0]
-    hook_words = _words_in_window(transcript, first_clip.source_in, first_clip.source_in + 4.0)
-    hook_text = " ".join(hook_words[:8]).strip()
-    if hook_text:
-        specs.append(
-            AnimationSpec(
-                kind=AnimationKind.HOOK_TITLE,
-                timeline_start=0.0,
-                timeline_end=min(3.0, total_duration),
-                text=hook_text,
-                extra=_hook_extra(brand, hook_text, edl, analysis),
-            )
-        )
+    hook = hook if hook is not None else plan_hook(edl, transcript, brand, analysis)
+    if hook.spec is not None:
+        specs.append(hook.spec)
 
     last_speaker: str | None = None
     for clip in edl.clips:
