@@ -3,7 +3,7 @@ strand a lone continuation word, and must leave every word's timing untouched.
 Synthetic transcripts only -- the heuristics are language-level."""
 from __future__ import annotations
 
-from itertools import pairwise
+import itertools
 
 from tests.conftest import make_word
 from video_edit_agent.captions.chunking import MIN_WORDS_PER_EVENT, CaptionChunk, chunk_words
@@ -26,7 +26,7 @@ def _texts(chunks: list[CaptionChunk]) -> list[str]:
 
 
 def _never_splits(chunks: list[CaptionChunk], first: str, second: str) -> bool:
-    for a, b in pairwise(chunks):
+    for a, b in itertools.pairwise(chunks):
         if a.words[-1].word == first and b.words[0].word == second:
             return False
     return True
@@ -135,3 +135,74 @@ def test_line_wrap_keeps_a_code_switched_phrase_on_one_slightly_long_line():
     # far too long for one line: still wrapped somehow
     long_run = _words(["alpha", "beta", "gamma", "delta", "epsilon", "zeta"])
     assert phrase_break_index(long_run, 12) is not None
+
+
+# --- Corrected Segment 16, checked on the ASS events that actually get rendered ------------
+
+_SEG16 = ["ولا", "هي", "كانت", "عبارة", "عن", "وجهة", "نظر", "من", "الـbusiness", "owner", "أو", "من", "الـbrand", "owner"]
+# per-word durations (s) as aligned on the real footage; contiguous, so a boundary never rides on a pause
+_SEG16_DUR = [0.38, 0.58, 0.38, 0.46, 0.12, 0.40, 0.36, 0.18, 0.54, 0.32, 0.16, 0.16, 0.42, 0.36]
+_PAIRS = (("وجهة", "نظر"), ("الـbusiness", "owner"), ("الـbrand", "owner"))
+
+
+def _seg16_words(prefix: list[str] | None = None, t0: float = 0.25) -> list[Word]:
+    out, t = [], t0
+    for tok, dur in [*[(p, 0.4) for p in prefix or []], *zip(_SEG16, _SEG16_DUR, strict=True)]:
+        out.append(make_word(tok, round(t, 3), round(t + dur, 3)))
+        t += dur
+    return out
+
+
+def _ass_event_words(words: list[Word], max_chars: int) -> list[list[str]]:
+    """Words of every Dialogue event in the generated ASS (tags, bidi controls and
+    hard line breaks removed) -- what libass is actually handed."""
+    import re
+
+    seg = Segment(id="s15", start=words[0].start, end=words[-1].end, text=" ".join(w.word for w in words), words=words)
+    transcript = Transcript(language="ar", segments=[seg], provider="test")
+    end = words[-1].end + 0.5
+    edl = EDL(clips=[EDLClip(source_file="x.mp4", source_in=0.0, source_out=end, timeline_in=0.0,
+                             timeline_out=end, caption_refs=["s15"])])
+    ass = build_ass(transcript, edl, CaptionStyle(name="t", word_highlight=True, max_chars_per_line=max_chars))
+    events = []
+    for line in ass.splitlines():
+        if not line.startswith("Dialogue:"):
+            continue
+        text = line.split(",", 9)[9]  # Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+        text = re.sub(r"\{[^}]*\}", "", text).replace("\\N", " ")
+        text = re.sub(r"[\u202a-\u202e\u2066-\u2069\u200e\u200f]", "", text)
+        events.append(text.split())
+    return events
+
+
+def _assert_units_intact(events: list[list[str]], budget) -> None:
+    for prev, nxt in itertools.pairwise(events):
+        for first, second in _PAIRS:
+            assert not (prev[-1] == first and nxt[0] == second), (budget, events)
+    joined = [" ".join(e) for e in events]
+    assert any("وجهة نظر" in e for e in joined), (budget, joined)
+    assert any("الـbusiness owner" in e for e in joined), (budget, joined)
+    assert any("الـbrand owner" in e for e in joined), (budget, joined)
+
+
+def test_segment_16_ass_events_never_split_a_semantic_unit():
+    events = _ass_event_words(_seg16_words(), max_chars=26)  # the client caption budget
+    _assert_units_intact(events, 26)
+    assert [w for e in events for w in e] == _SEG16  # order and text unchanged
+
+
+def test_segment_16_ass_events_hold_for_any_budget_and_lead_in():
+    prefixes = [[], ["زي", "يمتتقل"], ["وحقيقية", "زي", "يمتتقل"], ["للدمان", "ده", "وفيه", "بالي", "هيبقى"]]
+    for budget in range(18, 41):
+        for prefix in prefixes:
+            events = _ass_event_words(_seg16_words(prefix), max_chars=budget)
+            _assert_units_intact(events, (budget, prefix))
+
+
+def test_segment_16_chunk_list_and_ass_events_agree():
+    words = _seg16_words()
+    chunks = chunk_words(words, max_chars=26, max_duration=3.2)
+    events = _ass_event_words(words, max_chars=26)
+    assert [c.text.split() for c in chunks] == events
+    flat = [w for c in chunks for w in c.words]
+    assert [(w.word, w.start, w.end) for w in flat] == [(w.word, w.start, w.end) for w in words]
