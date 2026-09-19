@@ -63,3 +63,11 @@ full rules and the Editor/Creator/Assembler routing table. If a user's first
 message is a capability question ("إنت بتعمل إيه؟" / "What can you do?"),
 give the short three-workflow explanation from `README.md` before doing
 anything else.
+
+**Transcript review is chat-first.** Show the numbered transcript in the
+conversation (`videoedit review-chat`), let the user answer naturally
+(`9: <sentence>`, `14 صح`, `15 غير كلمة X إلى Y`, `اسمعني الجملة 15`), save
+their corrections, then continue to edit-plan review. Never send them to open
+WAV/JSON/ASS files; audio is on demand only. Approving a transcript segment
+does not approve hook copy. Details: "Transcript review is chat-first" in
+`agent/core_instructions.md`.

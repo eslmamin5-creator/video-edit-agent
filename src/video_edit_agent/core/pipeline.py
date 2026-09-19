@@ -507,6 +507,7 @@ def run_pipeline(
                 stage=ReviewStage.REVIEW_VISUALS,
                 ready_for_final_render=False,
                 unresolved_transcript=approval.unresolved_transcript,
+                segment_reviews=approval.segment_reviews,
                 text_treatments=_merged_text_treatments(approval, hook_review),
             ),
             review_dir,

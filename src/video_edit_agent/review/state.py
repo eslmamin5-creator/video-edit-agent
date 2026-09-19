@@ -14,6 +14,8 @@ from video_edit_agent.review.schemas import (
     CopySource,
     ReviewApprovalState,
     ReviewStage,
+    SegmentDecision,
+    SegmentReviewStatus,
     TextTreatmentReview,
     UnresolvedTranscriptItem,
 )
@@ -39,26 +41,64 @@ class UnresolvedReviewItems(RuntimeError):
     """Raised when approval is attempted while transcript items are open."""
 
 
+def _withdraw_transcript_copy(state: ReviewApprovalState, segment_id: str) -> None:
+    """Copy taken from the transcript is only as good as the transcript: it goes
+    back to pending (the approved visual stays); user-supplied copy is untouched."""
+    state.text_treatments = [
+        text_copy.pending_again(t) if t.copy_source is CopySource.APPROVED_TRANSCRIPT and segment_id in t.source_segment_ids else t
+        for t in state.text_treatments
+    ]
+
+
+def _set_decision(state: ReviewApprovalState, segment_id: str, status: SegmentReviewStatus | None) -> None:
+    state.segment_reviews = [d for d in state.segment_reviews if d.segment_id != segment_id]
+    if status is not None:
+        state.segment_reviews.append(SegmentDecision(segment_id=segment_id, status=status))
+
+
 def flag_unresolved(review_dir: Path, item: UnresolvedTranscriptItem) -> ReviewApprovalState:
     """Marks a transcript segment as awaiting the user's confirmation (upsert
     by segment id). The project cannot be approved while any item is open."""
     state = load_review_state(review_dir)
     state.unresolved_transcript = [i for i in state.unresolved_transcript if i.segment_id != item.segment_id]
     state.unresolved_transcript.append(item)
-    # Copy taken from the transcript is only as good as the transcript: it goes
-    # back to pending (the approved visual stays); user-supplied copy is untouched.
-    state.text_treatments = [
-        text_copy.pending_again(t) if t.copy_source is CopySource.APPROVED_TRANSCRIPT and item.segment_id in t.source_segment_ids else t
-        for t in state.text_treatments
-    ]
+    _set_decision(state, item.segment_id, None)  # an earlier decision no longer stands
+    _withdraw_transcript_copy(state, item.segment_id)
     state.ready_for_final_render = False
     save_review_state(state, review_dir)
     return state
 
 
 def resolve_unresolved(review_dir: Path, segment_id: str) -> ReviewApprovalState:
+    """The user confirmed the segment: closes its flag and records it approved."""
     state = load_review_state(review_dir)
     state.unresolved_transcript = [i for i in state.unresolved_transcript if i.segment_id != segment_id]
+    _set_decision(state, segment_id, SegmentReviewStatus.APPROVED)
+    save_review_state(state, review_dir)
+    return state
+
+
+def mark_corrected_pending(review_dir: Path, segment_id: str) -> ReviewApprovalState:
+    """A correction was stored but the user has not yet said the result is right
+    (e.g. a single-word fix). The pending decision replaces any `unresolved` flag
+    and, like it, blocks approval until the user says the result is right."""
+    state = load_review_state(review_dir)
+    state.unresolved_transcript = [i for i in state.unresolved_transcript if i.segment_id != segment_id]
+    _set_decision(state, segment_id, SegmentReviewStatus.CORRECTED_PENDING_APPROVAL)
+    _withdraw_transcript_copy(state, segment_id)
+    state.ready_for_final_render = False
+    save_review_state(state, review_dir)
+    return state
+
+
+def propose_copy(review_dir: Path, treatment: str, text: str) -> ReviewApprovalState:
+    """Records wording the agent PROPOSES for `treatment` (a rewrite, labelled as
+    such). Nothing is approved: copy status, source and visual stay as they were."""
+    if not text.strip():
+        raise ValueError("proposed copy must not be empty")
+    state = load_review_state(review_dir)
+    current = _treatment_or_raise(state, treatment)
+    state.text_treatments = [t.model_copy(update={"proposed_copy": text}) if t is current else t for t in state.text_treatments]
     save_review_state(state, review_dir)
     return state
 
@@ -68,9 +108,13 @@ def approve(review_dir: Path, note: str | None = None) -> ReviewApprovalState:
     render` becomes True short of an explicit bypass flag. Refused while any
     transcript item is still unresolved."""
     state = load_review_state(review_dir)
-    if state.unresolved_transcript:
-        open_ids = ", ".join(i.segment_id for i in state.unresolved_transcript)
-        raise UnresolvedReviewItems(f"unresolved transcript segments remain open: {open_ids}")
+    open_ids = [i.segment_id for i in state.unresolved_transcript]
+    open_ids += [
+        d.segment_id for d in state.segment_reviews
+        if d.status is SegmentReviewStatus.CORRECTED_PENDING_APPROVAL and d.segment_id not in open_ids
+    ]
+    if open_ids:
+        raise UnresolvedReviewItems(f"unresolved transcript segments remain open: {', '.join(open_ids)}")
     open_copy = text_copy.blocking_items(state.text_treatments)
     if open_copy:
         names = ", ".join(f"{t.treatment} ({t.blocking_reason or 'copy not approved'})" for t in open_copy)

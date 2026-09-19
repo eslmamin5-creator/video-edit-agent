@@ -30,6 +30,7 @@ from video_edit_agent.review.schemas import (
 HOOK_TREATMENT = "hook_title"
 BLOCK_UNRESOLVED_TRANSCRIPT = "unresolved transcript"
 BLOCK_NO_COPY = "no approved copy"
+BLOCK_COPY_NOT_CHOSEN = "hook wording not approved"
 
 _USER_COPY_SOURCES = (CopySource.USER_SUPPLIED, CopySource.APPROVED_REWRITE)
 
@@ -78,11 +79,17 @@ def decide_copy(
     existing: TextTreatmentReview | None = None,
     source_segments: list[int] | None = None,
     required: bool = True,
+    reviewed_segment_ids: set[str] | frozenset[str] = frozenset(),
 ) -> CopyDecision:
     """Applies the rule. `proposed_text` is what the transcript offers for the
     treatment; it is used only when every segment behind it is confirmed.
     User-supplied/approved copy already stored on `existing` always wins, and
-    `existing`'s visual approval is carried over untouched."""
+    `existing`'s visual approval is carried over untouched.
+
+    Approving a transcript segment is not approving on-screen wording: when a
+    source segment went through the user's transcript review
+    (`reviewed_segment_ids`), the copy stays pending until the user approves the
+    exact words (`with_user_copy`); nothing is cut down or rewritten for them."""
     review = TextTreatmentReview(
         treatment=treatment,
         required=required,
@@ -95,6 +102,7 @@ def decide_copy(
         review.visual_status = existing.visual_status
         review.visual_props = existing.visual_props
         review.required = existing.required
+        review.proposed_copy = existing.proposed_copy
 
     if existing is not None and existing.copy_source in _USER_COPY_SOURCES and existing.approved_copy:
         review.copy_status = ApprovalStatus.APPROVED
@@ -110,6 +118,9 @@ def decide_copy(
         review.placeholder_used_in_preview = True
     elif not proposed_text.strip():
         review.blocking_reason = BLOCK_NO_COPY
+        review.placeholder_used_in_preview = True
+    elif any(sid in reviewed_segment_ids for sid in source_segment_ids):
+        review.blocking_reason = BLOCK_COPY_NOT_CHOSEN
         review.placeholder_used_in_preview = True
     else:
         review.copy_status = ApprovalStatus.APPROVED

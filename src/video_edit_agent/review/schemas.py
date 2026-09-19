@@ -240,6 +240,30 @@ class UnresolvedTranscriptItem(BaseModel):
     reason: str = ""
 
 
+class SegmentReviewStatus(str, Enum):
+    """Where one transcript segment stands in the chat review.
+
+    approved: the user confirmed it (or typed the exact wording), or it has no
+        low-confidence words and was never flagged.
+    needs_review: low-confidence words and no decision yet (advisory).
+    corrected_pending_approval: a correction exists but the user has not yet
+        said the result is right (a partial word/phrase fix). Blocks approval.
+    unresolved: flagged and awaiting the user. Blocks approval.
+    """
+
+    APPROVED = "approved"
+    NEEDS_REVIEW = "needs_review"
+    CORRECTED_PENDING_APPROVAL = "corrected_pending_approval"
+    UNRESOLVED = "unresolved"
+
+
+class SegmentDecision(BaseModel):
+    """The user's explicit decision on one segment (persisted in the review state)."""
+
+    segment_id: str
+    status: SegmentReviewStatus  # only approved / corrected_pending_approval are stored
+
+
 class ApprovalStatus(str, Enum):
     PENDING_REVIEW = "pending_review"
     APPROVED = "approved"
@@ -274,6 +298,9 @@ class TextTreatmentReview(BaseModel):
     source_segment_ids: list[str] = Field(default_factory=list)
     source_segments: list[int] = Field(default_factory=list)  # 1-based, as in the audio review
     proposed_asr_text: str = ""  # reference for the reviewer; never rewritten
+    # Wording the agent PROPOSES after the transcript is approved (a rewrite, not
+    # a transcript line). Never on screen until the user approves it.
+    proposed_copy: str | None = None
     blocking_reason: str | None = None
     placeholder_text: str | None = None
     placeholder_used_in_preview: bool = False
@@ -290,6 +317,8 @@ class ReviewApprovalState(BaseModel):
     # Transcript segments still awaiting the user's confirmation; approval is
     # refused while any remain (see review.state.approve).
     unresolved_transcript: list[UnresolvedTranscriptItem] = Field(default_factory=list)
+    # Explicit per-segment decisions from the chat review (see SegmentReviewStatus).
+    segment_reviews: list[SegmentDecision] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
     # Per-treatment visual/copy approval (see TextTreatmentReview).
     text_treatments: list[TextTreatmentReview] = Field(default_factory=list)
@@ -302,6 +331,10 @@ class ReviewApprovalState(BaseModel):
             if t.treatment == "hook_title":
                 return t.copy_status.value
         return None
+
+    def reviewed_segment_ids(self) -> set[str]:
+        """Segments the user has looked at and decided on in the transcript review."""
+        return {d.segment_id for d in self.segment_reviews}
 
     def treatment(self, name: str) -> TextTreatmentReview | None:
         return next((t for t in self.text_treatments if t.treatment == name), None)

@@ -137,10 +137,11 @@ def edit(
         console.print(" - brand_summary.json      (brand colors/logo/CTA)")
         console.print(" - timeline_review.json    (edit/cut/B-roll/motion plan)")
         console.print(" - broll_review.json       (per-slot B-roll treatment; nothing generated yet)")
-        console.print(" - transcript_corrections.json (created by `videoedit review-correct`)")
+        console.print(" - transcript_corrections.json (created when you correct the transcript)")
         console.print(" - contact_sheet.jpg / frames/  (representative preview frames)")
         console.print(
-            f"Fix words with [bold]videoedit review-correct {result.project_dir} SEGMENT_ID \"text\"[/bold]; "
+            f"Review the transcript in chat with [bold]videoedit review-chat {result.project_dir} --open[/bold] "
+            f"(then answer naturally, e.g. `9: <sentence>`); "
             f"once satisfied run [bold]videoedit review-approve {result.project_dir}[/bold] "
             f"then re-run [bold]videoedit edit {video}[/bold] to render, "
             "or re-run this command with --yes to skip review entirely."
@@ -223,6 +224,32 @@ def review_correct(
     saved = add_correction(review_dir, TranscriptCorrection(segment_id=segment_id, corrected_text=text, word_index=word))
     review_state.resolve_unresolved(review_dir, segment_id)  # a confirmed correction closes its flag
     console.print(f"Saved. {len(saved)} correction(s) stored in {review_dir}")
+
+
+@app.command(name="review-chat")
+def review_chat(
+    project_dir: Path = typer.Argument(..., exists=True, help="The edit/ project directory."),
+    message: str = typer.Argument("", help="The user's message, exactly as typed (Arabic or English). Empty shows the review."),
+    review_lang: str = typer.Option("ar", "--lang", help="Language of the chat text: ar|en."),
+    open_review: bool = typer.Option(False, "--open", help="Start the review: flag every low-confidence segment as unresolved."),
+    source: Path | None = typer.Option(None, "--source", help="Audio/video to cut clips from (default: the project's own audio)."),
+    page_size: int = typer.Option(8, "--page-size", help="Segments per page."),
+):
+    """Chat-first transcript review. Pass the user's message as-is; the reply
+    (numbered sentences, statuses, confirmations) is meant to be shown in the
+    conversation. Understands approve / whole-sentence / word corrections,
+    audio on demand, and paging. Raw ASR is never modified."""
+    from video_edit_agent.review.chat_session import TranscriptReviewChat, open_transcript_review
+    from video_edit_agent.transcription.router import load_transcript
+
+    edit_dir = project_dir.parent if project_dir.name == "review" else project_dir
+    if open_review:
+        flagged = open_transcript_review(edit_dir / "review", load_transcript(edit_dir / "transcript_unified.json"))
+        console.print(f"{len(flagged)} segment(s) opened for review.")
+    reply = TranscriptReviewChat(edit_dir, lang=review_lang, page_size=page_size, source_media=source).reply(message)
+    print(reply.text)
+    for clip in reply.audio_paths:
+        print(f"AUDIO: {clip}")
 
 
 @app.command(name="review-approve-visual")

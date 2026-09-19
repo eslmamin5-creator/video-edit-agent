@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import re
 from pathlib import Path
 
 from video_edit_agent.core.schemas import Segment, Transcript, Word
@@ -44,6 +45,69 @@ def add_correction(review_dir: Path, correction: TranscriptCorrection) -> list[T
     existing.append(correction)
     save_corrections(review_dir, existing)
     return existing
+
+
+_PUNCT = ".,،؛;:!?؟\"'“”«»()[]{}…"
+
+
+def _key(token: str) -> str:
+    return token.strip(_PUNCT).casefold()
+
+
+def replace_phrase(text: str, old: str, new: str) -> tuple[str | None, int]:
+    """Replaces exactly one occurrence of the word/phrase `old` in `text` with `new`
+    (used verbatim -- never formalized or translated). Returns `(new_text, count)`.
+
+    Matching is whole-token, ignoring case and surrounding punctuation; the
+    punctuation around the matched tokens is kept. If there is no whole-token
+    match, a lone word is matched inside a longer token (an Arabic clitic such
+    as a leading `ال`) when that is unambiguous. `new_text` is None when there
+    are zero matches or more than one (`count` says which): the caller must ask
+    instead of guessing which one the user meant."""
+    tokens = text.split()
+    old_keys = [_key(t) for t in old.split()]
+    n = len(old_keys)
+    if n == 0 or not new.strip():
+        return None, 0
+    hits = [i for i in range(len(tokens) - n + 1) if [_key(t) for t in tokens[i:i + n]] == old_keys]
+    if len(hits) > 1:
+        return None, len(hits)
+    if not hits:
+        if n != 1:
+            return None, 0
+        pattern = re.compile(re.escape(old.strip(_PUNCT)), re.IGNORECASE)
+        inside = [(i, len(pattern.findall(t))) for i, t in enumerate(tokens) if pattern.search(t)]
+        total = sum(c for _, c in inside)
+        if total != 1:
+            return None, total
+        i = inside[0][0]
+        tokens[i] = pattern.sub(lambda _m: new.strip(), tokens[i], count=1)
+        return " ".join(tokens), 1
+    i, j = hits[0], hits[0] + n - 1
+    lead = tokens[i][:len(tokens[i]) - len(tokens[i].lstrip(_PUNCT))]
+    trail = tokens[j][len(tokens[j].rstrip(_PUNCT)):]
+    fresh = new.split()
+    if lead and fresh[0][0] not in _PUNCT:
+        fresh[0] = lead + fresh[0]
+    if trail and fresh[-1][-1] not in _PUNCT:
+        fresh[-1] += trail
+    tokens[i:j + 1] = fresh
+    return " ".join(tokens), 1
+
+
+def set_segment_text(review_dir: Path, segment_id: str, text: str) -> list[TranscriptCorrection]:
+    """Stores `text` as the whole corrected text of a segment. Earlier word-level
+    corrections for that segment are dropped (they indexed the previous wording)."""
+    kept = [c for c in load_corrections(review_dir) if c.segment_id != segment_id]
+    kept.append(TranscriptCorrection(segment_id=segment_id, corrected_text=text))
+    save_corrections(review_dir, kept)
+    return kept
+
+
+def clear_corrections(review_dir: Path, segment_id: str) -> list[TranscriptCorrection]:
+    kept = [c for c in load_corrections(review_dir) if c.segment_id != segment_id]
+    save_corrections(review_dir, kept)
+    return kept
 
 
 def _spread(words: list[str], start: float, end: float, confidence: float = 1.0) -> list[Word]:

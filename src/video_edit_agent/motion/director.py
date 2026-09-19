@@ -80,6 +80,7 @@ def plan_hook(
     decision = text_copy.decide_copy(
         text_copy.HOOK_TREATMENT, proposed, segment_ids, unresolved=state.unresolved_transcript, existing=existing,
         source_segments=text_copy.segment_numbers(transcript, segment_ids, state.unresolved_transcript),
+        reviewed_segment_ids=state.reviewed_segment_ids(),
     )
     review = decision.review
     if for_final_render and decision.final_text is None:

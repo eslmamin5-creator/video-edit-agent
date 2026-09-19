@@ -80,6 +80,47 @@ clarifying question rather than guessing. Don't expose internal CLI syntax
 in the answer unless it's actually useful to the user (e.g. they asked a
 technical question, or you're reporting the exact command you ran).
 
+## Transcript review is chat-first
+
+After transcription the user reviews the transcript **in the conversation**,
+never by opening WAV/JSON/ASS files. Flow: transcribe -> show the transcript
+in chat -> the user approves or corrects -> corrections are saved -> continue
+to edit-plan review.
+
+- Run `videoedit review-chat <edit dir> --open` once to start the review
+  (low-confidence segments become `unresolved`), then pass **the user's
+  message as typed** as the second argument for every later turn:
+  `videoedit review-chat <edit dir> "<message>"`. Show the printed text in the
+  chat as-is; there is no command syntax for the user to learn.
+- The user sees 1-based numbers (`[09] 00:32.82-00:34.74`), the current text,
+  a `Status:` line and the `Low-confidence:` words. Never show internal ids
+  such as `s8`. The default view is suspicious-first; the user can ask for
+  all segments, only suspicious ones, a range, specific numbers, next/previous.
+  Long videos are paged (8 per page), never dumped.
+- Understood in Arabic and English: `1 صح` / `approve 1`, `الجملة 5: <text>`,
+  `الجملة 14 كلها المفروض تكون: <text>`, `في الجملة 9 غير كلمة X إلى Y`,
+  `غير service إلى سيرفس`, `اسمعني الجملة 15`, `وريني بس الجمل اللي فيها شك`,
+  `راجعلي 9 و14 و15 بس`, `اعتمد الباقي`.
+- Text the user dictates is stored **verbatim** (never translated, never
+  formalized). A word-level fix that is ambiguous (the word appears twice, or
+  nowhere) is not guessed: the reply asks which one.
+- Segment status: `approved`, `needs_review` (low-confidence, advisory),
+  `corrected_pending_approval`, `unresolved`. A whole-sentence replacement or
+  "N صح" approves that segment; a word/phrase fix leaves it
+  `corrected_pending_approval` until the user says it is right.
+  `unresolved` and `corrected_pending_approval` block `review-approve`.
+- Audio is a fallback, cut **only** when the user asks (`اسمعني الجملة 9`).
+  The reply prints `AUDIO: <path>`; send that file to the user in the
+  conversation (e.g. `SendUserFile`) instead of telling them where it is.
+- Corrections live in `review/transcript_corrections.json` and review state in
+  `review/review_state.json`; the raw `transcript_unified.json` is never
+  modified. Project-specific corrections belong only in that state.
+- **Transcript approval is not hook-copy approval.** Approving a segment does
+  not make it the on-screen hook: hook copy stays `pending_review` until the
+  user approves the exact words (`review-copy`). A rewrite you suggest is
+  recorded as a *proposed rewrite* (`proposed_copy`) and is never rendered
+  until approved. Raw ASR is never used as hook copy.
+
 ## Architecture map
 
 - `core/` — config layering, media (ffmpeg subprocess wrapper), schemas

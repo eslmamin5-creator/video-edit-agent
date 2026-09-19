@@ -3,6 +3,18 @@
 All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+- Chat-first transcript review (`videoedit review-chat`): numbered,
+  timestamped sentences with status and low-confidence words shown in the
+  conversation; natural Arabic/English replies to approve, replace a sentence,
+  replace a word/phrase, hear a segment, page or filter. New segment states
+  (`approved`, `needs_review`, `corrected_pending_approval`, `unresolved`),
+  audio only on demand, and `proposed_copy` so a suggested hook rewrite is never
+  rendered before approval. Approving a transcript segment no longer approves
+  hook copy taken from it.
+
 ## [0.2.2] - 2026-09-15
 
 Arabic-first UX, product onboarding, and user guide only -- Editor / Creator

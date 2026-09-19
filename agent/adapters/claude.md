@@ -11,3 +11,8 @@ below is additive, not a replacement.
 - If asked to extend a provider or motion engine, follow the existing
   ABC/adapter pattern in that module rather than introducing a new
   abstraction style.
+- Transcript review: use `videoedit review-chat` (see "Transcript review is
+  chat-first" in the core instructions). Paste the command's output into your
+  reply, pass the user's next message to it unchanged, and when it prints
+  `AUDIO: <path>` deliver that clip with `SendUserFile` rather than pointing
+  the user at `edit/review/audio/`. Ask one thing per turn.
