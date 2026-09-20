@@ -55,6 +55,7 @@ from video_edit_agent.review.builder import (
     render_timeline_markdown,
 )
 from video_edit_agent.review.corrections import apply_corrections, load_corrections
+from video_edit_agent.review.edit_plan import effective_decisions
 from video_edit_agent.review.preview import (
     build_contact_sheet,
     generate_preview_frames,
@@ -304,7 +305,7 @@ def run_pipeline(
         try:
             broll_items = plan_broll(
                 edl, transcript, paths.edit_dir / "broll_assets", paths.cache_dir / "broll_generated",
-                brand=brand, decisions=load_decisions(review_dir),
+                brand=brand, decisions=effective_decisions(review_dir, load_decisions(review_dir)),
                 allow_generation=not offline and not plan_only and approval.broll_generation_approved,
             )
         except Exception as exc:  # noqa: BLE001

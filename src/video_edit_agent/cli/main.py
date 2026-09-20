@@ -252,6 +252,31 @@ def review_chat(
         print(f"AUDIO: {clip}")
 
 
+@app.command(name="review-plan")
+def review_plan(
+    project_dir: Path = typer.Argument(..., exists=True, help="The edit/ project directory."),
+    message: str = typer.Argument("", help="The user's message, exactly as typed (Arabic or English). Empty shows what is pending."),
+    review_lang: str = typer.Option("ar", "--lang", help="Language of the chat text: ar|en."),
+    open_plan: bool = typer.Option(False, "--open", help="Build the edit plan from the editorial decisions (kept if it already exists)."),
+    rebuild: bool = typer.Option(False, "--rebuild", help="With --open: discard the saved plan and rebuild it."),
+    settled: list[str] = typer.Option([], "--settled", help="TREATMENT=reason for treatments already approved elsewhere (repeatable)."),
+):
+    """Chat-first edit-plan / B-roll review. Pass the user's message as-is; the
+    reply is meant to be shown in the conversation. Nothing is generated or
+    rendered, and approving here never sets ready_for_final_render."""
+    from video_edit_agent.review.edit_plan_chat import EditPlanChat, open_edit_plan
+
+    edit_dir = project_dir.parent if project_dir.name == "review" else project_dir
+    if open_plan:
+        known = {}
+        for item in settled:
+            name, _, why = item.partition("=")
+            known[name.strip()] = why.strip() or "approved earlier"
+        plan = open_edit_plan(edit_dir, settled=known, rebuild=rebuild)
+        console.print(f"{len(plan.reviewable())} decision(s) in the edit plan, {len(plan.pending())} pending.")
+    print(EditPlanChat(edit_dir, lang=review_lang).reply(message).text)
+
+
 @app.command(name="review-approve-visual")
 def review_approve_visual(
     project_dir: Path = typer.Argument(..., exists=True, help="The edit/ project directory."),

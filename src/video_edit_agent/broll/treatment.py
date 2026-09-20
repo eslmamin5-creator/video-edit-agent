@@ -53,6 +53,13 @@ class TreatmentDecision(BaseModel):
     # Only meaningful for generated_broll; the mandatory realism/no-text rules
     # are appended by `broll.prompt.build_broll_prompt` regardless.
     prompt: str | None = None
+    # Review-only hints (see `review.edit_plan`): what to do when the asset is
+    # missing / generation is not approved, other treatments worth offering, and
+    # candidate keywords for text treatments (each must come from the approved
+    # transcript of that slot).
+    fallback: Treatment | None = None
+    alternatives: list[Treatment] = []
+    text_options: list[str] = []
 
 
 def load_decisions(review_dir: Path) -> list[TreatmentDecision]:

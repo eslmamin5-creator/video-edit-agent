@@ -121,6 +121,34 @@ to edit-plan review.
   recorded as a *proposed rewrite* (`proposed_copy`) and is never rendered
   until approved. Raw ASR is never used as hook copy.
 
+## Edit-plan / B-roll review is chat-first too
+
+Order: EDIT PLAN -> show the treatments in chat -> the user approves or
+changes -> decisions saved -> only then source/generate assets -> quality gate
+-> final composition. The user must never meet a B-roll or motion decision for
+the first time in a finished render. Generated B-roll is one treatment among
+several (stay on speaker, punch-in, kinetic typography, behind-subject text,
+motion graphic, local B-roll, generated B-roll, no treatment), never the default.
+
+- Decisions come from `review/broll_editorial.json`; `videoedit review-plan
+  <edit dir> --open [--settled TREATMENT=reason]` builds `review/edit_plan.json`
+  (slots already approved elsewhere, e.g. hook or punch-in, are settled and not
+  asked). Then pass the user's message as typed: `videoedit review-plan
+  <edit dir> "<message>"` and show the printed text as-is (no JSON/EDL).
+- Understood: `1 موافق`, `2 خليه speaker`, `3 بدل generated اعمله motion
+  graphic`, `4 استخدم B-roll محلي`, `5 اختار الخيار B` / `5 النص: <text>`,
+  `3 ولّد`, `2 بلاش`, `اعتمد الباقي`, `وريني بس الحاجات اللي محتاجة asset`,
+  `وريني الـgenerated فقط`, `وريني الكل`.
+- Per-slot status: `pending_review`, `approved`, `changed`, `rejected`,
+  `asset_required`, `generation_approved`. Approving a treatment **never**
+  approves AI generation: that needs its own explicit answer for that slot, and
+  until then the slot's fallback is what composition uses. Missing local
+  footage never blocks (fallback). On-screen text (behind-subject/kinetic) comes
+  only from the approved transcript and is approved verbatim before the slot is.
+- `review-approve` is refused while any edit-plan slot is `pending_review`.
+  Nothing in this review generates assets, renders a cutout or sets
+  `ready_for_final_render`.
+
 ## Architecture map
 
 - `core/` — config layering, media (ffmpeg subprocess wrapper), schemas
