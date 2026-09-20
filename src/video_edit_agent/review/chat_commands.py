@@ -154,6 +154,32 @@ def _only_approval(text: str) -> bool:
     return bool(words) and all(t in _APPROVE_WORDS for t in words) and bool(re.search(r"\d", text))
 
 
+_ENTRY_START = re.compile(rf"^\s*(?:{_LABEL}\s*)?\d+(?!\d)", re.IGNORECASE)
+
+
+def split_message(message: str) -> list[str]:
+    """One user message may answer several segments (one per line: `9: ...` / `14: ...`).
+
+    A line that begins with a segment number starts a new entry; any other line
+    continues the entry above it (a dictated sentence wrapped over two lines).
+    A message with fewer than two numbered lines is returned whole, so a single
+    sentence that merely contains digits is never cut up.
+    """
+    entries: list[str] = []
+    numbered = 0
+    for line in message.splitlines():
+        if not line.strip():
+            continue
+        if _ENTRY_START.match(_norm(line)):
+            numbered += 1
+            entries.append(line.strip())
+        elif entries:
+            entries[-1] += " " + line.strip()
+        else:
+            entries.append(line.strip())
+    return entries if numbered >= 2 else [message.strip()]
+
+
 def parse(message: str) -> Command:
     raw = message.strip()
     if not raw:

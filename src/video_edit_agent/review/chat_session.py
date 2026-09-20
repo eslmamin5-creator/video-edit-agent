@@ -47,6 +47,8 @@ class ChatReply:
     text: str
     changed: bool = False  # review state or corrections were written
     audio_paths: list[Path] = field(default_factory=list)
+    note: str = ""  # the confirmation / explanation line(s) above the list
+    body: str = ""  # the list of segments below it
 
 
 def open_transcript_review(review_dir: Path, transcript: Transcript) -> list[int]:
@@ -141,9 +143,24 @@ class TranscriptReviewChat:
 
     # ---- one turn --------------------------------------------------------------
     def reply(self, message: str | None = None) -> ChatReply:
+        entries = cmd.split_message(message or "")
+        if len(entries) == 1:
+            return self._reply_one(entries[0])
+        # several segments answered in one message: apply each in order, then
+        # show every confirmation followed by ONE refreshed list.
+        replies = [self._reply_one(entry) for entry in entries]
+        notes = [r.note for r in replies if r.note]
+        audio = [p for r in replies for p in r.audio_paths]
+        body = replies[-1].body
+        return ChatReply(
+            text="\n\n".join([*notes, body] if body else notes),
+            changed=any(r.changed for r in replies), audio_paths=audio, note="\n\n".join(notes), body=body,
+        )
+
+    def _reply_one(self, message: str) -> ChatReply:
         views = self._views()
         cursor = self._load_cursor()
-        command = cmd.parse(message or "")
+        command = cmd.parse(message)
         ar = self.lang == "ar"
 
         numbered = command.kind in _NUMBERED and command.view != tc.VIEW_RANGE
@@ -175,7 +192,10 @@ class TranscriptReviewChat:
         self._save_cursor(
             tc.ViewSpec(spec.kind, spec.numbers, page), shown, last if last is not None else cursor.get("last_segment"),
         )
-        return ChatReply(text=f"{prefix}\n\n{text}" if prefix else text, changed=changed, audio_paths=audio or [])
+        return ChatReply(
+            text=f"{prefix}\n\n{text}" if prefix else text, changed=changed, audio_paths=audio or [],
+            note=prefix, body=text,
+        )
 
     def _after_change(
         self, prefix: str, cursor: dict, last: int | None, audio: list[Path] | None = None,

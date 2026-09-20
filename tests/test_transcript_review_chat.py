@@ -108,6 +108,30 @@ def test_sentence_correction_by_number_persists_and_approves(tmp_path: Path):
     assert [(d.segment_id, d.status) for d in state.segment_reviews] == [("s2", S.APPROVED)]
 
 
+def test_one_message_can_answer_several_segments_one_per_line(tmp_path: Path):
+    """Regression: `9: ...\\n\\n14: ...` used to be stored whole as the text of segment 9."""
+    edit = _project(tmp_path, low={2: [2], 3: [1], 4: [0]})
+    open_transcript_review(edit / "review", load_transcript(edit / "transcript_unified.json"))
+    reply = _chat(edit).reply("3: الأضلاع الخمس، Five Cs.\n\n4: أنا بحب الـservice جدًا.\n\n5: ده كلام سليم، تمامًا.")
+    saved = {c.segment_id: c.corrected_text for c in corr.load_corrections(edit / "review")}
+    assert saved == {"s2": "الأضلاع الخمس، Five Cs.", "s3": "أنا بحب الـservice جدًا.", "s4": "ده كلام سليم، تمامًا."}
+    assert not any("\n" in t or re.search(r"\d\s*:", t) for t in saved.values())
+    state = rs.load_review_state(edit / "review")
+    assert state.unresolved_transcript == []
+    assert {d.segment_id: d.status for d in state.segment_reviews} == {"s2": S.APPROVED, "s3": S.APPROVED, "s4": S.APPROVED}
+    assert reply.changed
+    for n in (3, 4, 5):
+        assert f"[{n:02d}]" in reply.text  # one confirmation per segment
+
+
+def test_split_message_only_cuts_at_numbered_lines():
+    assert cmd.split_message("9: الجملة الأولى\n14: الجملة التانية") == ["9: الجملة الأولى", "14: الجملة التانية"]
+    assert cmd.split_message("٩ صح\n١٤ صح") == ["٩ صح", "١٤ صح"]
+    assert cmd.split_message("9: جملة طويلة\nبتكمل في سطر تاني\n14 صح") == ["9: جملة طويلة بتكمل في سطر تاني", "14 صح"]
+    assert cmd.split_message("9: جملة واحدة\nبس على سطرين") == ["9: جملة واحدة\nبس على سطرين"]
+    assert cmd.split_message("9 و14 و15 صح") == ["9 و14 و15 صح"]
+
+
 # 4. word-level replacement persists -----------------------------------------------------------------------
 
 
