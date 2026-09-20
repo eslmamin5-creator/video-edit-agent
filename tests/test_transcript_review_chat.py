@@ -124,6 +124,36 @@ def test_one_message_can_answer_several_segments_one_per_line(tmp_path: Path):
         assert f"[{n:02d}]" in reply.text  # one confirmation per segment
 
 
+def test_a_single_line_reply_with_dot_separated_entries_is_split(tmp_path: Path, monkeypatch):
+    """`7 <sentence> . 13 <sentence> . 17 ok . play 3 and 5` -- no colons, no line breaks."""
+    made: list[int] = []
+    monkeypatch.setattr(
+        "video_edit_agent.review.chat_session.ensure_clip",
+        lambda review_dir, n, start, end, source: made.append(n) or review_dir / f"clip_{n}.mp3",
+    )
+    monkeypatch.setattr("video_edit_agent.review.chat_session.find_source_audio", lambda *a, **k: Path("src.wav"))
+    edit = _project(tmp_path, low={0: [1], 1: [1], 2: [2], 3: [1]})
+    open_transcript_review(edit / "review", load_transcript(edit / "transcript_unified.json"))
+    reply = _chat(edit).reply(
+        "1 إزاي بقى إنت كأجينسي تبقى فاهم . 2 ما تكونش آراء شخصية ولا لاء . 4 تمام مظبوط . "
+        "بالنسبة لرقم 3 و5 عايز اسمعهم لاني غير متذكر"
+    )
+    saved = {c.segment_id: c.corrected_text for c in corr.load_corrections(edit / "review")}
+    assert saved == {"s0": "إزاي بقى إنت كأجينسي تبقى فاهم", "s1": "ما تكونش آراء شخصية ولا لاء"}
+    statuses = {d.segment_id: d.status for d in rs.load_review_state(edit / "review").segment_reviews}
+    assert statuses == {"s0": S.APPROVED, "s1": S.APPROVED, "s3": S.APPROVED}
+    assert made == [3, 5]  # audio only for the segments asked about
+    assert [p.name for p in reply.audio_paths] == ["clip_3.mp3", "clip_5.mp3"]
+    assert "s2" not in statuses  # the segment the user only wanted to hear is not approved
+
+
+def test_number_and_sentence_without_a_colon_is_a_replacement_but_lists_are_not():
+    assert cmd.parse("7 انت لازم تقوم بدورك كواحد ماركت ريسيرشر").kind == cmd.KIND_REPLACE_TEXT
+    assert cmd.parse("9 و14 و15 بس").kind != cmd.KIND_REPLACE_TEXT
+    assert cmd.parse("17 تمام مظبوط").kind == cmd.KIND_APPROVE
+    assert cmd.parse("15 اسمعني الجملة دي").kind == cmd.KIND_AUDIO
+
+
 def test_split_message_only_cuts_at_numbered_lines():
     assert cmd.split_message("9: الجملة الأولى\n14: الجملة التانية") == ["9: الجملة الأولى", "14: الجملة التانية"]
     assert cmd.split_message("٩ صح\n١٤ صح") == ["٩ صح", "١٤ صح"]

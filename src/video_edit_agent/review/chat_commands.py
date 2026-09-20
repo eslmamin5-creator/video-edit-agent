@@ -177,7 +177,39 @@ def split_message(message: str) -> list[str]:
             entries[-1] += " " + line.strip()
         else:
             entries.append(line.strip())
-    return entries if numbered >= 2 else [message.strip()]
+    if numbered >= 2:
+        return entries
+    return _split_inline(message.strip())
+
+
+_TERMINATOR = re.compile(r"(?<=\S)\s*[.۔؟?!]\s+|\s+[.۔؟?!]\s*(?=\S)")
+_INSTRUCTION_KINDS = (KIND_AUDIO, KIND_SHOW, KIND_APPROVE_REST, KIND_NEXT, KIND_PREVIOUS, KIND_HELP)
+
+
+def _split_inline(message: str) -> list[str]:
+    """Same idea for a single line: `7 <sentence> . 13 <sentence> . 17 ok . play 10 and 19`.
+
+    The message is cut at sentence terminators. A piece that starts with a segment
+    number, or that is itself an instruction (audio / show / next ...), starts a new
+    entry; any other piece continues the entry before it, so a dictated sentence
+    that contains a full stop is not cut in half. Fewer than two entries -> whole.
+    """
+    pieces = _TERMINATOR.split(message)
+    if len(pieces) < 2:
+        return [message]
+    entries: list[str] = []
+    for piece in (p.strip() for p in pieces):
+        if not piece:
+            continue
+        starts = _ENTRY_START.match(_norm(piece)) or parse(piece).kind in _INSTRUCTION_KINDS
+        if starts or not entries:
+            entries.append(piece)
+        else:
+            entries[-1] += ". " + piece
+    numbered = [e for e in entries if _ENTRY_START.match(_norm(e))]
+    if len(entries) < 2 or not numbered:
+        return [message]
+    return entries
 
 
 def parse(message: str) -> Command:
@@ -214,6 +246,17 @@ def parse(message: str) -> Command:
         m = pattern.match(norm)
         if m:
             return Command(KIND_REPLACE_TEXT, numbers=(int(m.group("n")),), text=raw[m.start("text"):m.end("text")])
+
+    # "7 <the whole correct sentence>" with no colon: a number followed by a real
+    # sentence (3+ words) that is not an approval or an instruction.
+    lead = _ENTRY_START.match(norm)
+    if lead:
+        rest = raw[lead.end():].strip()
+        content = [w for w in re.findall(r"[^\W\d_]+", _bare(rest).lower()) if w not in _FILLER]
+        if len(content) >= 3 and not _AUDIO.search(_bare(rest)) \
+                and not _SHOW_VERB.search(_bare(rest)) and not _SUSPICIOUS.search(_bare(rest)):
+            number = int(re.search(r"\d+", norm[:lead.end()]).group())
+            return Command(KIND_REPLACE_TEXT, numbers=(number,), text=rest)
 
     if _NEXT.match(bare):
         return Command(KIND_NEXT)
