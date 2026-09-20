@@ -48,7 +48,53 @@ def _ensure_template_copied(project_root: Path) -> Path:
     dest = cache_dir / "template"
     if not dest.exists():
         shutil.copytree(_TEMPLATE_DIR, dest, ignore=shutil.ignore_patterns("node_modules"))
+    else:
+        _sync_template_sources(dest)
     return dest
+
+
+def _sync_template_sources(dest: Path) -> None:
+    """A cached template copy predates later template changes (a new component, a
+    fixed prop): refresh every bundled source file whose content differs, so a
+    render never runs an older component than the one the Python side targets.
+    `node_modules` and staged assets are left alone."""
+    for src in (_TEMPLATE_DIR / "src").rglob("*"):
+        if not src.is_file():
+            continue
+        target = dest / "src" / src.relative_to(_TEMPLATE_DIR / "src")
+        if not target.exists() or target.read_bytes() != src.read_bytes():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, target)
+
+
+_FONT_WEIGHTS = (("extralight", 200), ("light", 300), ("semibold", 600), ("bold", 700), ("regular", 400))
+
+
+def _font_weight(name: str) -> int:
+    lowered = name.lower()
+    return next((w for key, w in _FONT_WEIGHTS if key in lowered), 400)
+
+
+def _stage_brand_fonts(template_dest: Path, brand: Brand | None) -> list[dict]:
+    """Copies the brand's font files under the template's `public/fonts` and
+    returns the `theme.fontFiles` descriptors, so Remotion draws with the brand
+    typeface the captions use (libass gets the same directory) instead of a
+    system fallback. Empty when the brand ships no font files."""
+    if brand is None or not brand.arabic_font:
+        return []
+    from video_edit_agent.brand.loader import resolve_fonts_dir
+
+    fonts_dir = resolve_fonts_dir(brand.name)
+    if fonts_dir is None:
+        return []
+    target = template_dest / "public" / "fonts"
+    target.mkdir(parents=True, exist_ok=True)
+    out: list[dict] = []
+    for font in sorted(fonts_dir.iterdir()):
+        if font.is_file() and font.suffix.lower() in {".ttf", ".otf", ".woff", ".woff2"}:
+            shutil.copy2(font, target / font.name)
+            out.append({"family": brand.arabic_font, "file": f"fonts/{font.name}", "weight": _font_weight(font.name)})
+    return out
 
 
 def _resolve(cmd: str) -> str:
@@ -84,7 +130,7 @@ def _ensure_deps_installed(template_dest: Path, offline: bool = False) -> None:
         raise RemotionRenderError(f"npm install failed: {result.stderr[-2000:]}")
 
 
-def _theme_props(brand: Brand | None) -> dict | None:
+def _theme_props(brand: Brand | None, font_files: list[dict] | None = None) -> dict | None:
     """Builds the `BrandTheme` prop shape (template/src/theme.ts) from a
     Brand Profile. Returns None when no brand is available at all, letting
     the template's own neutral `defaultTheme` apply.
@@ -97,7 +143,7 @@ def _theme_props(brand: Brand | None) -> dict | None:
     Workflow spec section 3/11-B)."""
     if brand is None:
         return None
-    return {
+    theme = {
         "primary": brand.colors.primary,
         "secondary": brand.colors.secondary,
         # No arbitrary yellow fallback (spec section 3): fall back to the
@@ -106,9 +152,12 @@ def _theme_props(brand: Brand | None) -> dict | None:
         "fontFamily": brand.arabic_font or _FALLBACK_FONT_FAMILY,
         "rtl": brand.captions.rtl,
     }
+    if font_files:
+        theme["fontFiles"] = font_files
+    return theme
 
 
-def _props_for_spec(spec: AnimationSpec, brand: Brand | None = None) -> dict:
+def _props_for_spec(spec: AnimationSpec, brand: Brand | None = None, font_files: list[dict] | None = None) -> dict:
     """Map the generic AnimationSpec fields onto the props each Remotion
     composition expects (see Root.tsx defaultProps for the shape)."""
     base = {"text": spec.text, "name": spec.text, "title": spec.text, "metric": spec.text, "label": spec.text}
@@ -116,7 +165,7 @@ def _props_for_spec(spec: AnimationSpec, brand: Brand | None = None) -> dict:
         base.update({"subtitle": spec.subtext, "description": spec.subtext, "attribution": spec.subtext})
     if spec.value is not None:
         base.update({"value": spec.value})
-    theme = _theme_props(brand)
+    theme = _theme_props(brand, font_files)
     if theme is not None:
         base["theme"] = theme
     base.update(spec.extra)
@@ -144,6 +193,7 @@ def render(
 
     template_dest = _ensure_template_copied(project_root)
     _ensure_deps_installed(template_dest, offline=offline)
+    font_files = _stage_brand_fonts(template_dest, brand)
 
     # The render subprocess is launched with cwd=template_dest (below), so any
     # relative path handed to it on the command line resolves against that
@@ -151,7 +201,7 @@ def render(
     # relative (e.g. `videoedit edit sample.mp4` from the project dir) --
     # resolve to absolute paths before building the command.
     output_path = output_path.resolve()
-    props = _props_for_spec(spec, brand)
+    props = _props_for_spec(spec, brand, font_files)
     props_path = (template_dest / f"_props_{slot_id}.json").resolve()
     props_path.write_text(json.dumps(props, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -202,4 +252,42 @@ def render(
     if result.returncode != 0 or not output_path.exists():
         raise RemotionRenderError(f"Remotion render failed: {result.stderr[-2000:]}")
 
+    return output_path
+
+
+def render_still(
+    spec: AnimationSpec,
+    project_root: Path,
+    output_path: Path,
+    *,
+    frame: int = 0,
+    slot_id: str = "still",
+    offline: bool = False,
+    brand: Brand | None = None,
+) -> Path:
+    """Render one frame of a composition to a transparent PNG (the same
+    composition, props and fonts `render` uses). The behind-subject planner reads
+    the real glyph shapes back from such a still."""
+    if not is_available():
+        raise RemotionUnavailable("Node.js/npm or Remotion template not available")
+    template_dest = _ensure_template_copied(project_root)
+    _ensure_deps_installed(template_dest, offline=offline)
+    font_files = _stage_brand_fonts(template_dest, brand)
+    output_path = output_path.resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    props_path = (template_dest / f"_props_{slot_id}.json").resolve()
+    props_path.write_text(json.dumps(_props_for_spec(spec, brand, font_files), ensure_ascii=False), encoding="utf-8")
+    kind_value = spec.kind.value if hasattr(spec.kind, "value") else str(spec.kind)
+    cmd = [
+        _resolve("npx"), "remotion", "still", "src/index.ts", kind_value.replace("_", "-"), str(output_path),
+        f"--props={props_path}", f"--frame={frame}", "--image-format=png",
+    ]
+    try:
+        result = subprocess.run(cmd, cwd=str(template_dest), capture_output=True, text=True, timeout=300, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise RemotionRenderError(f"Remotion still timed out: {exc}") from exc
+    finally:
+        props_path.unlink(missing_ok=True)
+    if result.returncode != 0 or not output_path.exists():
+        raise RemotionRenderError(f"Remotion still failed: {result.stderr[-2000:]}")
     return output_path

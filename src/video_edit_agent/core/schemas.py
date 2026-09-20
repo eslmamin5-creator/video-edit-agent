@@ -238,6 +238,7 @@ class QAReport(BaseModel):
 
 class AnimationKind(str, Enum):
     HOOK_TITLE = "hook_title"
+    BEHIND_TEXT = "behind_text"
     LOWER_THIRD = "lower_third"
     STAT_COUNTER = "stat_counter"
     QUOTE = "quote"

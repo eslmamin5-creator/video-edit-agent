@@ -18,7 +18,13 @@ from video_edit_agent.core.media import content_hash, run
 from video_edit_agent.core.schemas import EDL, EDLClip
 from video_edit_agent.subject import mask_cache
 from video_edit_agent.subject.detect import SubjectDetectionUnavailable
-from video_edit_agent.subject.segment import DEFAULT_SAMPLE_FPS, segment_clip
+from video_edit_agent.subject.refine import (
+    REFINE_VERSION,
+    refine_alpha,
+    stabilize_temporal,
+    to_canvas,
+)
+from video_edit_agent.subject.segment import DEFAULT_SAMPLE_FPS, SegmentedClip, segment_clip
 from video_edit_agent.subject.track import MaskTrack
 
 MIN_USABLE_CONFIDENCE = 0.05
@@ -113,37 +119,21 @@ def to_source_window(clip: EDLClip, timeline_start: float, timeline_end: float) 
     return src_start, src_end
 
 
-def _cutout_cache_path(cache_dir: Path, source_path: Path, start: float, end: float, sample_fps: float) -> Path:
+def _cutout_cache_path(
+    cache_dir: Path, source_path: Path, start: float, end: float, sample_fps: float,
+    output_size: tuple[int, int] | None = None, refine: bool = False,
+) -> Path:
     file_hash = content_hash(source_path)
-    return cache_dir / f"{file_hash}_{start:.3f}_{end:.3f}_{sample_fps:.2f}_cutout.mov"
+    size = f"_{output_size[0]}x{output_size[1]}" if output_size else ""
+    tag = f"_{REFINE_VERSION}" if refine else ""
+    return cache_dir / f"{file_hash}_{start:.3f}_{end:.3f}_{sample_fps:.2f}{size}{tag}_cutout.mov"
 
 
-def render_subject_cutout(
-    source_path: Path,
-    start: float,
-    end: float,
-    cache_dir: Path,
-    sample_fps: float = DEFAULT_SAMPLE_FPS,
-    output_fps: float = 30.0,
-) -> Path | None:
-    """Produces (and caches) an RGBA video of just the on-camera subject cut
-    out of `source_path` between [start, end), using the segmentation mask
-    (interpolated onto every output frame via `MaskTrack`) as the alpha
-    channel. Encoded with `qtrle` (lossless, alpha-capable) so it can be
-    layered back into the ffmpeg filter graph as a normal overlay input.
-
-    Returns None (never raises) if segmentation is unavailable, extraction
-    fails, or no usable mask was found -- callers must fall back to a plain
-    foreground overlay (spec section 26) and log the fallback.
-    """
-    if end <= start:
-        return None
-
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    out_path = _cutout_cache_path(cache_dir, source_path, start, end, sample_fps)
-    if out_path.exists():
-        return out_path
-
+def load_subject_clip(
+    source_path: Path, start: float, end: float, cache_dir: Path, sample_fps: float = DEFAULT_SAMPLE_FPS,
+) -> SegmentedClip | None:
+    """The sampled subject masks for a source window (cached). None when
+    segmentation is unavailable, extracts nothing, or finds no confident subject."""
     clip = mask_cache.load(cache_dir, source_path, start, end, sample_fps)
     if clip is None or not clip.masks:
         try:
@@ -153,15 +143,79 @@ def render_subject_cutout(
         if not clip.masks:
             return None
         mask_cache.save(cache_dir, source_path, start, end, sample_fps, clip)
+    if sum(float(m.mean()) for m in clip.masks) / len(clip.masks) < MIN_USABLE_CONFIDENCE:
+        return None
+    return clip
 
-    avg_confidence = sum(float(m.mean()) for m in clip.masks) / len(clip.masks)
-    if avg_confidence < MIN_USABLE_CONFIDENCE:
+
+def stabilized_clip(clip: SegmentedClip, size: tuple[int, int]) -> SegmentedClip:
+    """`clip` framed to the render canvas `size` with the samples blended over
+    their neighbours (`refine.stabilize_temporal`). This is the mask the cutout
+    and the behind-subject placement search both use, so they agree."""
+    framed = [to_canvas(m, size) for m in clip.masks]
+    return SegmentedClip(
+        source_path=clip.source_path, fps_sampled=clip.fps_sampled, frame_times=list(clip.frame_times),
+        masks=stabilize_temporal(framed),
+    )
+
+
+def refined_canvas_masks(clip: SegmentedClip, size: tuple[int, int]) -> tuple[list[float], list[np.ndarray]]:
+    """(sample times, cleaned alpha at canvas size) for the placement search: the
+    stabilised samples through `refine_alpha` (edge tightening, island and hole
+    cleanup; the picture-guided edge snap happens per output frame in the cutout)."""
+    stable = stabilized_clip(clip, size)
+    return list(stable.frame_times), [refine_alpha(m) for m in stable.masks]
+
+
+def render_subject_cutout(
+    source_path: Path,
+    start: float,
+    end: float,
+    cache_dir: Path,
+    sample_fps: float = DEFAULT_SAMPLE_FPS,
+    output_fps: float = 30.0,
+    output_size: tuple[int, int] | None = None,
+    refine: bool = False,
+) -> Path | None:
+    """Produces (and caches) an RGBA video of just the on-camera subject cut
+    out of `source_path` between [start, end), using the segmentation mask
+    (interpolated onto every output frame via `MaskTrack`) as the alpha
+    channel. Encoded with `qtrle` (lossless, alpha-capable) so it can be
+    layered back into the ffmpeg filter graph as a normal overlay input.
+
+    `output_size` scales-to-cover and centre-crops the frames to the render
+    canvas so the cutout is not stored at source (4K) resolution. `refine` runs
+    the deterministic mask clean-up (`subject/refine.py`: temporal blend, edge
+    tightening, island/hole cleanup, picture-guided edge snap, halo pull-in); it
+    needs `output_size`.
+
+    Returns None (never raises) if segmentation is unavailable, extraction
+    fails, or no usable mask was found -- callers must fall back to a plain
+    foreground overlay (spec section 26) and log the fallback.
+    """
+    if end <= start:
         return None
 
+    refine = refine and output_size is not None
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    out_path = _cutout_cache_path(cache_dir, source_path, start, end, sample_fps, output_size, refine)
+    if out_path.exists():
+        return out_path
+
+    clip = load_subject_clip(source_path, start, end, cache_dir, sample_fps)
+    if clip is None:
+        return None
+    if refine:
+        clip = stabilized_clip(clip, output_size)
     track = MaskTrack(clip)
     duration = end - start
 
     from PIL import Image
+
+    frame_filter = f"fps={output_fps}"
+    if output_size is not None:
+        w, h = output_size
+        frame_filter += f",scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -169,7 +223,7 @@ def render_subject_cutout(
         extract = run(
             [
                 "ffmpeg", "-y", "-ss", str(start), "-t", str(duration), "-i", str(source_path),
-                "-vf", f"fps={output_fps}", frame_pattern,
+                "-vf", frame_filter, frame_pattern,
             ],
             timeout=180,
         )
@@ -185,6 +239,8 @@ def render_subject_cutout(
             t = start + i / output_fps
             mask = track.mask_at(t)
             image = Image.open(frame_path).convert("RGB")
+            if refine and mask is not None:
+                mask = refine_alpha(mask, np.array(image))
             if mask is None:
                 alpha = np.zeros((image.height, image.width), dtype=np.uint8)
             elif mask.shape[:2] != (image.height, image.width):

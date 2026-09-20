@@ -200,16 +200,23 @@ def build_filter_complex(plan: RenderPlan) -> tuple[list[str], str, str]:
         inputs += ["-i", str(ov.path)]
         ov_input = overlay_idx_offset + j
         ov_label = f"{ov_input}:v"
+        if ov.start > 0:
+            # An overlay clip's own timestamps start at 0. Without this shift the
+            # overlay filter has run out of frames by the time the window opens
+            # and freezes on the clip's LAST frame for the whole window.
+            shifted_label = f"ovshift{j}"
+            filters.append(f"[{ov_label}]setpts=PTS-STARTPTS+{ov.start:.3f}/TB[{shifted_label}]")
+            ov_label = shifted_label
         if ov.scale_to_canvas:
             scaled_label = f"ovscaled{j}"
             filters.append(
-                f"[{ov_input}:v]scale={edl.width}:{edl.height}:force_original_aspect_ratio=increase,"
+                f"[{ov_label}]scale={edl.width}:{edl.height}:force_original_aspect_ratio=increase,"
                 f"crop={edl.width}:{edl.height}[{scaled_label}]"
             )
             ov_label = scaled_label
         elif ov.scale_width is not None:
             scaled_label = f"ovscaled{j}"
-            filters.append(f"[{ov_input}:v]scale={ov.scale_width}:-1[{scaled_label}]")
+            filters.append(f"[{ov_label}]scale={ov.scale_width}:-1[{scaled_label}]")
             ov_label = scaled_label
         new_label = f"vov{j}"
         enable = f"between(t,{ov.start:.3f},{ov.end:.3f})"

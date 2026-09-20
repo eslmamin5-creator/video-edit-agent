@@ -23,6 +23,7 @@ from video_edit_agent.motion.simple import engine as simple_engine
 _DIAGRAM_KINDS = {AnimationKind.DIAGRAM, AnimationKind.DATA_VIZ}
 _REMOTION_PREFERRED_KINDS = {
     AnimationKind.HOOK_TITLE,
+    AnimationKind.BEHIND_TEXT,
     AnimationKind.LOWER_THIRD,
     AnimationKind.STAT_COUNTER,
     AnimationKind.QUOTE,

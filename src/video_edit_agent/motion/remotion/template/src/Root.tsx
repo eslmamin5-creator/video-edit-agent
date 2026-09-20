@@ -1,6 +1,7 @@
 import React from "react";
 import { Composition } from "remotion";
 import { HookTitle } from "./components/HookTitle";
+import { BehindText } from "./components/BehindText";
 import { LowerThird } from "./components/LowerThird";
 import { StatCounter } from "./components/StatCounter";
 import { Quote } from "./components/Quote";
@@ -30,6 +31,14 @@ export const RemotionRoot: React.FC = () => {
         fps={FPS}
         {...DEFAULT_SIZE}
         defaultProps={{ text: "Hook Title", theme: defaultTheme }}
+      />
+      <Composition
+        id="behind-text"
+        component={BehindText}
+        durationInFrames={DEFAULT_DURATION}
+        fps={FPS}
+        {...DEFAULT_SIZE}
+        defaultProps={{ text: "Text", theme: defaultTheme }}
       />
       <Composition
         id="lower-third"

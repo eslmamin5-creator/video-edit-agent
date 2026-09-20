@@ -13,13 +13,16 @@ texts are all arguments.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 
+from video_edit_agent.brand.schema import Brand
 from video_edit_agent.captions.engine import build_ass
 from video_edit_agent.captions.styles import CaptionStyle
 from video_edit_agent.core.media import run
-from video_edit_agent.core.schemas import EDL, EDLClip, Reframe, Transcript
+from video_edit_agent.core.schemas import EDL, AnimationSpec, EDLClip, Reframe, Transcript
+from video_edit_agent.motion.behind_subject import BehindSubjectComposite, compose_behind_subject
 from video_edit_agent.render.composition import CaptionBurn, Overlay, RenderPlan
 from video_edit_agent.render.export import resolve_preset
 from video_edit_agent.render.ffmpeg import RenderError, render
@@ -161,6 +164,81 @@ def render_overlay_preview(
     except RenderError as exc:
         raise MicroPreviewError(str(exc)) from exc
     return _trim_to(out_path, sub.total_duration)
+
+
+def timeline_to_source_window(edl: EDL, start: float, end: float) -> tuple[float, float]:
+    """The SOURCE window that plays on the timeline between `start` and `end`
+    (first covered clip's start to last covered clip's end)."""
+    lows, highs = [], []
+    for clip in edl.clips:
+        lo, hi = max(clip.timeline_in, start), min(clip.timeline_out, end)
+        if hi - lo <= 1e-3:
+            continue
+        speed = clip.speed if clip.speed and clip.speed > 0 else 1.0
+        lows.append(clip.source_in + (lo - clip.timeline_in) * speed)
+        highs.append(clip.source_in + (hi - clip.timeline_in) * speed)
+    if not lows:
+        raise MicroPreviewError(f"no EDL clip covers timeline window [{start}, {end}]")
+    return min(lows), max(highs)
+
+
+@dataclass
+class PreviewCaptions:
+    """The caption renderer's inputs, so a preview shows the treatment under the real
+    captions (the hierarchy between them is part of what is being judged)."""
+
+    transcript: Transcript
+    style: CaptionStyle
+    fonts_dir: Path | None = None
+
+
+def render_behind_subject_preview(
+    edl: EDL,
+    spec: AnimationSpec,
+    project_root: Path,
+    out_path: Path,
+    *,
+    brand: Brand | None,
+    cutout_dir: Path,
+    window: tuple[float, float] | None = None,
+    captions: PreviewCaptions | None = None,
+    workdir: Path | None = None,
+    offline: bool = True,
+    preset: str = "reel",
+    compose: Callable[..., BehindSubjectComposite] = compose_behind_subject,
+) -> BehindSubjectComposite:
+    """Real footage + audio for the TIMELINE `window` (default: the spec's own show
+    window) with the behind-subject text composed by `compose_behind_subject` -- the
+    SAME function the final render calls, on the SAME spec (phrase timing, placement,
+    colour, opacity, entrance/exit) -- so the preview is the cutout/text layering the
+    final video will have, at the plan's own framing. `captions` burns the real
+    captions over it. No other overlay."""
+    if not spec.behind_subject:
+        raise MicroPreviewError("the spec is not a behind-subject treatment")
+    workdir = workdir or out_path.parent / "_work"
+    workdir.mkdir(parents=True, exist_ok=True)
+    window = window or (spec.timeline_start, spec.timeline_end)
+    composite = compose(
+        spec, edl, project_root, workdir / "motion", cutout_dir,
+        brand=brand, fps=edl.fps, slot_id=f"{out_path.stem}", offline=offline,
+    )
+    if not composite.overlays:
+        detail = composite.item.error or "; ".join(composite.item.fallback_log) or "no output"
+        raise MicroPreviewError(f"the behind-subject graphic could not be rendered: {detail}")
+    sub = slice_edl(edl, *timeline_to_source_window(edl, *window), zoom=None)
+    shift = window[0]
+    overlays = [replace(o, start=o.start - shift, end=o.end - shift) for o in composite.overlays]
+    burn = None
+    if captions is not None:
+        ass_path = workdir / f"{out_path.stem}.ass"
+        ass_path.write_text(build_ass(captions.transcript, sub, captions.style), encoding="utf-8")
+        burn = CaptionBurn(ass_path=ass_path, fonts_dir=captions.fonts_dir)
+    try:
+        render(RenderPlan(edl=sub, overlays=overlays, captions=burn), out_path, resolve_preset(preset), crf=22)
+    except RenderError as exc:
+        raise MicroPreviewError(str(exc)) from exc
+    _trim_to(out_path, sub.total_duration)
+    return composite
 
 
 def _trim_to(path: Path, duration: float) -> Path:

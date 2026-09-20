@@ -34,6 +34,10 @@ from video_edit_agent.editorial.edl import validate as validate_edl
 from video_edit_agent.editorial.packer import write_takes_packed
 from video_edit_agent.editorial.planner import build_edl
 from video_edit_agent.editorial.punch_in import plan_punch_ins
+from video_edit_agent.motion.behind_subject import (
+    compose_behind_subject,
+    plan_behind_subject_for_project,
+)
 from video_edit_agent.motion.director import build_motion_plan, plan_hook
 from video_edit_agent.motion.router import render_motion
 from video_edit_agent.qa.brand import run_brand_qa
@@ -55,7 +59,7 @@ from video_edit_agent.review.builder import (
     render_timeline_markdown,
 )
 from video_edit_agent.review.corrections import apply_corrections, load_corrections
-from video_edit_agent.review.edit_plan import effective_decisions
+from video_edit_agent.review.edit_plan import effective_decisions, load_plan
 from video_edit_agent.review.preview import (
     build_contact_sheet,
     generate_preview_frames,
@@ -68,11 +72,7 @@ from video_edit_agent.review.schemas import (
     ReviewStage,
     TextTreatmentReview,
 )
-from video_edit_agent.subject.compositor import (
-    find_enclosing_clip,
-    render_subject_cutout,
-    to_source_window,
-)
+from video_edit_agent.subject.compositor import render_subject_cutout
 from video_edit_agent.subject.framing import analyze_clip
 from video_edit_agent.transcription.router import TranscriptionRouter, save_transcript
 
@@ -334,6 +334,15 @@ def run_pipeline(
             # becomes hook copy (placeholder in review, no copy layer in a final render).
             hook_plan = plan_hook(edl, transcript, brand, footage, approval, for_final_render=not plan_only)
             specs = build_motion_plan(edl, transcript, brand=brand, analysis=footage, hook=hook_plan)
+            # Behind-subject text the user approved in the edit plan (nothing while pending).
+            for bs_plan in plan_behind_subject_for_project(
+                load_plan(review_dir), edl, brand, transcript=transcript, caption_style=caption_style,
+                project_root=paths.root, cache_dir=paths.cache_dir, offline=offline,
+            ):
+                if bs_plan.spec is not None:
+                    specs.append(bs_plan.spec)
+                if not bs_plan.recommended:
+                    warnings.append(f"Edit-plan slot {bs_plan.slot}: {bs_plan.reason} -> {bs_plan.decision}")
             hook_review = hook_plan.review
             if hook_plan.spec is None and hook_plan.review is not None:
                 warnings.append(
@@ -351,53 +360,27 @@ def run_pipeline(
                 # happens before the user approves the plan.
                 motion_items.append(MotionPlanItem(spec=spec, engine_used=None, output_path=None))
                 continue
+            if spec.behind_subject:
+                # Behind-subject compositing (spec Phase 2 section 25): the shared
+                # implementation (`motion/behind_subject.py`), also used by the
+                # behind-subject micro-preview: graphic first, subject cutout on top.
+                composite = compose_behind_subject(
+                    spec, edl, paths.root, motion_output_dir, paths.cache_dir / "subject_cutouts",
+                    brand=brand, fps=edl.fps, slot_id=f"motion{i}", offline=offline, label=str(i),
+                    render_fn=render_motion, cutout_fn=render_subject_cutout,
+                )
+                motion_items.append(composite.item)
+                overlays.extend(composite.overlays)
+                warnings.extend(composite.warnings)
+                if composite.decision:
+                    memory.log_decision(composite.decision)
+                continue
             item = render_motion(
                 spec, paths.root, motion_output_dir, brand=brand, fps=edl.fps, slot_id=f"motion{i}", offline=offline
             )
             motion_items.append(item)
-            if not item.output_path:
-                continue
-
-            graphic_overlay = Overlay(path=Path(item.output_path), start=spec.timeline_start, end=spec.timeline_end)
-
-            if not spec.behind_subject:
-                overlays.append(graphic_overlay)
-                continue
-
-            # Behind-subject compositing (spec Phase 2 section 25): draw the
-            # graphic first (it will cover the subject baked into the base
-            # frame), then draw a subject-only cutout on top to restore the
-            # subject in front of it. Falls back to a plain foreground
-            # overlay -- never drops the overlay -- if the window doesn't map
-            # onto a single source clip or segmentation can't produce a
-            # usable mask (spec section 26).
-            graphic_overlay.behind_subject = True
-            overlays.append(graphic_overlay)
-
-            enclosing = find_enclosing_clip(edl, spec.timeline_start, spec.timeline_end)
-            cutout_path = None
-            if enclosing is not None:
-                src_start, src_end = to_source_window(enclosing, spec.timeline_start, spec.timeline_end)
-                cutout_path = render_subject_cutout(
-                    Path(enclosing.source_file), src_start, src_end, paths.cache_dir / "subject_cutouts",
-                )
-
-            if cutout_path is not None:
-                overlays.append(
-                    Overlay(path=cutout_path, start=spec.timeline_start, end=spec.timeline_end)
-                )
-                memory.log_decision(
-                    f"Behind-subject compositing applied for motion slot {i} ({spec.kind.value})"
-                )
-            else:
-                reason = "motion window spans a cut" if enclosing is None else "no usable subject mask"
-                warnings.append(
-                    f"Behind-subject requested for motion slot {i} but unavailable ({reason}); "
-                    "used plain foreground overlay instead"
-                )
-                memory.log_decision(
-                    f"Behind-subject fallback for motion slot {i}: {reason} -> plain overlay"
-                )
+            if item.output_path:
+                overlays.append(Overlay(path=Path(item.output_path), start=spec.timeline_start, end=spec.timeline_end))
 
         import json
 

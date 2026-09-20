@@ -113,7 +113,29 @@ def _render_quote(draw: ImageDraw.ImageDraw, spec: AnimationSpec, canvas: tuple[
         draw.text((margin, int(h * 0.4) + 140), f"— {spec.subtext}", font=sub_font, fill=palette.subtext)
 
 
+def _render_behind_text(draw: ImageDraw.ImageDraw, spec: AnimationSpec, canvas: tuple[int, int], palette: _Palette) -> None:
+    """The phrase as one locked group; sizing, colour, opacity and position come from
+    the planner (`spec.extra`). Static stand-in for the Remotion entrance/exit."""
+    w, h = canvas
+    extra = spec.extra
+    lines = list(extra.get("lines") or [spec.text])
+    font = _load_font(int(extra.get("fontPx") or 160), palette)
+    fill = _hex_to_rgba(extra["color"]) if extra.get("color") else palette.text
+    fill = (*fill[:3], round(255 * float(extra.get("opacity", 1.0))))
+    outline = extra.get("outline") or None
+    stroke = int(outline["width"]) if outline else 0
+    stroke_fill = _hex_to_rgba(outline["color"]) if outline else None
+    line_h = int(font.size * 1.1) if hasattr(font, "size") else 176
+    top = float(extra.get("centerY") or h * 0.4) - line_h * len(lines) / 2
+    cx = float(extra.get("centerX") or w / 2)
+    for i, line in enumerate(lines):
+        bbox = draw.textbbox((0, 0), line, font=font, stroke_width=stroke)
+        draw.text((cx - (bbox[2] - bbox[0]) / 2, top + i * line_h), line, font=font, fill=fill,
+                  stroke_width=stroke, stroke_fill=stroke_fill)
+
+
 _RENDERERS = {
+    AnimationKind.BEHIND_TEXT: _render_behind_text,
     AnimationKind.LABEL: _render_label,
     AnimationKind.LOWER_THIRD: _render_label,
     AnimationKind.BOX: _render_box,

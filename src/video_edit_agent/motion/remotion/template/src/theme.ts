@@ -6,6 +6,8 @@ export type BrandTheme = {
   accent: string;
   fontFamily: string;
   rtl: boolean;
+  // Brand font files staged under public/ by the adapter: family, path, weight.
+  fontFiles?: { family: string; file: string; weight: number }[];
 };
 
 export const defaultTheme: BrandTheme = {

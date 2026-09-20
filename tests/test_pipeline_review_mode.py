@@ -208,6 +208,8 @@ def test_review_false_still_follows_normal_render_path(monkeypatch, pipeline_env
 
     monkeypatch.setattr(pipeline_mod, "render_motion", fake_render_motion)
     monkeypatch.setattr(pipeline_mod, "render_subject_cutout", fake_cutout)
+    # A punched-in clip gets no cutout (it would not follow the reframe); keep this flow test unzoomed.
+    monkeypatch.setattr(pipeline_mod, "plan_punch_ins", lambda *_a, **_k: None)
     monkeypatch.setattr(pipeline_mod, "render_ffmpeg", fake_render)
     monkeypatch.setattr(pipeline_mod, "plan_broll", spy_plan_broll)
     monkeypatch.setattr(planner_mod.gemini_image, "generate_broll_image", lambda item, *_a, **_k: item)
