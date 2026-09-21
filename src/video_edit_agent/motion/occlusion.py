@@ -48,9 +48,125 @@ class OcclusionPolicy:
     min_worst_stability: float = 0.80
     min_subject_frac: float = 0.02  # of the frame: less and there is no subject to hide behind
     foreground_hidden: float = 0.005  # mask-edge tolerance when the text must sit fully clear of the subject
+    # meaningful occlusion (Phase 1.3.1): the subject must really be IN FRONT of glyph bodies, not just touch them
+    edge_erode_frac: float = 0.02  # of the font size: the glyph core drops the antialiased fringe and thin strokes' edges
+    subject_erode_px: int = 2  # the subject core drops the matte fringe and a one-pixel hair contact
+    min_overlap_ratio: float = 0.06  # core glyph px behind the subject / core glyph px
+    min_occluded_glyphs: int = 2  # glyph units (connected ink shapes) that are meaningfully behind the subject
+    min_glyph_overlap: float = 0.20  # a glyph unit counts as occluded when this share of its core is behind the subject
+    min_overlap_rows: float = 0.20  # the overlap must reach this share of the ink's height (not a sliver along one edge)
+    min_visible_ratio: float = 0.70  # share of the glyph ink that stays visible
+    min_visible_per_word: float = 0.50  # every word keeps at least this much visible
+    require_meaningful: bool = True  # Behind-Subject needs the subject truly in front of glyph bodies (off only for legacy checks)
+    composition_sizes: int = 3  # font sizes tried per layout in the composition search (largest ... smallest)
+    composition_overlaps: tuple[float, ...] = (0.20, 0.25, 0.30, 0.45, 0.60, 0.80)  # share of the text height put inside the silhouette top
 
 
 DEFAULT_POLICY = OcclusionPolicy()
+
+
+@dataclass(frozen=True)
+class MeaningfulOcclusion:
+    """How much of the glyph BODIES (an eroded core, not the antialiased fringe) is really behind the subject's silhouette,
+    measured on the actual rendered geometry. Ratios are worst-case over the hold's mask samples."""
+
+    text_total_px: int
+    text_subject_overlap_px: int
+    text_subject_overlap_ratio: float
+    visible_text_ratio: float
+    occluded_glyph_count: int
+    total_glyph_count: int
+    word_overlap_ratio: tuple[float, ...]
+    overlap_rows_frac: float  # share of the ink's height the overlap reaches
+    overlap_on_head_frac: float  # of the overlap pixels: on the head/hair (above the face's bottom edge)
+    overlap_on_torso_frac: float  # ... on the shoulders/torso (below it)
+    passed: bool
+    reasons: tuple[str, ...] = ()
+
+    def summary(self) -> dict:
+        return {
+            "text_total_px": self.text_total_px, "text_subject_overlap_px": self.text_subject_overlap_px,
+            "text_subject_overlap_ratio": round(self.text_subject_overlap_ratio, 4), "visible_text_ratio": round(self.visible_text_ratio, 4),
+            "occluded_glyph_count": self.occluded_glyph_count, "total_glyph_count": self.total_glyph_count,
+            "word_overlap_ratio": [round(v, 3) for v in self.word_overlap_ratio], "overlap_rows_frac": round(self.overlap_rows_frac, 3),
+            "overlap_on_head_frac": round(self.overlap_on_head_frac, 3), "overlap_on_torso_frac": round(self.overlap_on_torso_frac, 3),
+            "passed": self.passed, "reasons": list(self.reasons),
+        }
+
+
+def _core(binary: np.ndarray, px: int) -> np.ndarray:
+    import cv2
+
+    if px <= 0:
+        return binary
+    return cv2.erode(binary.astype(np.uint8), np.ones((2 * px + 1, 2 * px + 1), np.uint8)) > 0
+
+
+def meaningful_occlusion(
+    alphas: Sequence[np.ndarray],
+    font_px: int,
+    origin: tuple[int, int],
+    masks: Sequence[np.ndarray],
+    *,
+    face_bottom_px: float | None = None,
+    policy: OcclusionPolicy | None = None,
+) -> MeaningfulOcclusion:
+    """Judges whether the subject is meaningfully in front of the text. `alphas` are the words' ink alphas on one grid,
+    `origin` the canvas pixel of that grid's top-left, `masks` the subject alphas over the hold (canvas-sized), and
+    `face_bottom_px` splits the overlap into head/hair vs torso. Tiny edge contact, the antialiasing fringe and a
+    one-pixel hair contact are removed by measuring an eroded glyph core against an eroded subject core."""
+    import cv2
+
+    pol = policy or DEFAULT_POLICY
+    h, w = alphas[0].shape
+    x0, y0 = origin
+    union = np.maximum.reduce(list(alphas))
+    ink = union > 0.5
+    core = _core(ink, max(1, round(font_px * pol.edge_erode_frac)))
+    word_core = [_core(a > 0.5, max(1, round(font_px * pol.edge_erode_frac))) for a in alphas]
+    total = int(core.sum())
+    n_lab, labels = cv2.connectedComponents(core.astype(np.uint8), connectivity=8)
+    sizes = np.bincount(labels.ravel(), minlength=n_lab)
+    min_size = max(4, 0.01 * max(total, 1))
+    units = [i for i in range(1, n_lab) if sizes[i] >= min_size]
+    worst = None
+    for mask in masks:
+        crop = mask[y0:y0 + h, x0:x0 + w] if mask.shape[0] >= y0 + h and mask.shape[1] >= x0 + w else np.zeros((h, w), np.float32)
+        subj = _core(crop > 0.5, pol.subject_erode_px)
+        over = core & subj
+        n_over = int(over.sum())
+        hit = np.bincount(labels[over], minlength=n_lab)
+        occluded = sum(1 for i in units if hit[i] >= pol.min_glyph_overlap * sizes[i])
+        rows = float(over.any(axis=1).sum()) / max(int(ink.any(axis=1).sum()), 1)
+        words = tuple(float((over & wc).sum()) / max(int(wc.sum()), 1) for wc in word_core)
+        visible = 1.0 - float((union * crop).sum()) / max(float(union.sum()), 1.0)
+        if face_bottom_px is not None and n_over:
+            ys = np.where(over)[0] + y0
+            head = float((ys < face_bottom_px).sum()) / n_over
+        else:
+            head = 0.0
+        cand = (n_over / max(total, 1), n_over, occluded, rows, words, visible, head)
+        if worst is None:
+            worst = cand
+        else:  # the sample with the LEAST occlusion decides whether it is meaningful; the LEAST visible decides readability
+            worst = (cand if cand[0] < worst[0] else worst)[:5] + (min(visible, worst[5]),) + (cand if cand[0] < worst[0] else worst)[6:]
+    ratio, n_over, occluded, rows, words, visible, head = worst or (0.0, 0, 0, 0.0, tuple(0.0 for _ in alphas), 1.0, 0.0)
+    reasons: list[str] = []
+    if ratio < pol.min_overlap_ratio:
+        reasons.append(f"only {ratio * 100:.1f}% of the glyph bodies are behind the subject (need {pol.min_overlap_ratio * 100:.0f}%)")
+    if occluded < pol.min_occluded_glyphs:
+        reasons.append(f"{occluded} glyph(s) are meaningfully occluded (need {pol.min_occluded_glyphs})")
+    if rows < pol.min_overlap_rows:
+        reasons.append(f"the overlap reaches only {rows * 100:.0f}% of the text height: a sliver on one edge")
+    if visible < pol.min_visible_ratio:
+        reasons.append(f"only {visible * 100:.0f}% of the text stays visible (need {pol.min_visible_ratio * 100:.0f}%)")
+    if any(1.0 - v < pol.min_visible_per_word for v in words):
+        reasons.append("a word is mostly hidden")
+    return MeaningfulOcclusion(
+        text_total_px=total, text_subject_overlap_px=n_over, text_subject_overlap_ratio=ratio, visible_text_ratio=visible,
+        occluded_glyph_count=occluded, total_glyph_count=len(units), word_overlap_ratio=words, overlap_rows_frac=rows,
+        overlap_on_head_frac=head, overlap_on_torso_frac=1.0 - head if n_over else 0.0, passed=not reasons, reasons=tuple(reasons),
+    )
 
 
 @dataclass
@@ -326,3 +442,172 @@ def _score(p: Placement, canvas: tuple[int, int], policy: OcclusionPolicy, requi
     depth = -abs(p.hidden - policy.target_hidden) * 2.0 if require_depth else 0.0
     off_axis = -0.15 * abs(p.center[0] - width / 2) / width
     return impact + depth + off_axis
+
+
+
+# --------------------------------------------------------------------------
+# Composition candidates (Phase 1.3.1): a SMALL deterministic search
+# --------------------------------------------------------------------------
+
+NOT_SUITABLE_FOR_SHOT = "not_suitable_for_this_shot"
+
+
+@dataclass(frozen=True)
+class CameraVariant:
+    """A camera framing a candidate is judged under: the subject is transformed by zoom `zoom` with crop anchor
+    (`anchor_x`, `anchor_y`) (the renderer's `face_frame` math). Only a static (zoom 1.0) framing is one the cutout
+    renderer can follow today; the others are judged so the report can say what a camera move would have bought."""
+
+    name: str
+    zoom: float = 1.0
+    anchor_x: float = 0.5
+    anchor_y: float = 0.30
+
+    @property
+    def static(self) -> bool:
+        return abs(self.zoom - 1.0) < 1e-6
+
+
+@dataclass
+class CompositionCandidate:
+    camera: CameraVariant
+    placement: Placement
+    occlusion: MeaningfulOcclusion
+    valid: bool
+    score: float
+    rejected_by: str = ""
+
+    def summary(self) -> dict:
+        return {
+            "camera": {"name": self.camera.name, "zoom": self.camera.zoom, "anchor_x": self.camera.anchor_x, "anchor_y": self.camera.anchor_y},
+            "placement": self.placement.summary(), "meaningful_occlusion": self.occlusion.summary(),
+            "valid": self.valid, "score": round(self.score, 4), "rejected_by": self.rejected_by,
+        }
+
+
+@dataclass
+class CompositionSearch:
+    considered: int = 0
+    valid: int = 0
+    best: CompositionCandidate | None = None  # the best VALID candidate under a static camera (renderable)
+    best_any: CompositionCandidate | None = None  # the best valid one under any camera
+    closest: CompositionCandidate | None = None  # the candidate that came closest to meaningful, for the report
+    near_miss: CompositionCandidate | None = None  # best LEGAL candidate (face, key word, captions ok) that is only not meaningful enough
+    rejected: Counter = field(default_factory=Counter)
+
+    @property
+    def status(self) -> str:
+        return "ok" if self.best is not None else NOT_SUITABLE_FOR_SHOT
+
+
+def transform_mask(mask: np.ndarray, variant: CameraVariant) -> np.ndarray:
+    if variant.static:
+        return mask
+    import cv2
+
+    h, w = mask.shape[:2]
+    ox, oy = (variant.zoom - 1.0) * w * variant.anchor_x, (variant.zoom - 1.0) * h * variant.anchor_y
+    m = np.array([[variant.zoom, 0.0, -ox], [0.0, variant.zoom, -oy]], np.float32)
+    return cv2.warpAffine(mask, m, (w, h), flags=cv2.INTER_LINEAR, borderValue=0)
+
+
+def transform_box(box: Box | None, variant: CameraVariant) -> Box | None:
+    if box is None or variant.static:
+        return box
+    z = variant.zoom
+    ox, oy = (z - 1.0) * variant.anchor_x, (z - 1.0) * variant.anchor_y
+    return (box[0] * z - ox, box[1] * z - oy, box[2] * z, box[3] * z)
+
+
+def _silhouette_top(masks: Sequence[np.ndarray]) -> int | None:
+    rows = np.flatnonzero(np.max(np.stack([m > 0.5 for m in masks]), axis=(0, 2)))
+    return int(rows[0]) if rows.size else None
+
+
+def _composition_score(p: Placement, mo: MeaningfulOcclusion, canvas: tuple[int, int], policy: OcclusionPolicy) -> float:
+    """Meaningful occlusion first, then readability, size and balance; caption clearance is a hard rule elsewhere."""
+    width, _ = canvas
+    depth = min(mo.text_subject_overlap_ratio / max(policy.target_hidden, 1e-6), 1.5)
+    size = p.font_px / (width * policy.max_font_frac)
+    balance = -abs(p.center[0] - width / 2) / width
+    return 1.6 * depth + 1.0 * mo.visible_text_ratio + 0.6 * size + 0.4 * balance
+
+
+def _closeness(c: CompositionCandidate) -> float:
+    return c.occlusion.text_subject_overlap_ratio * c.occlusion.visible_text_ratio
+
+
+def search_composition(
+    layouts: Sequence[GlyphLayout],
+    masks: Sequence[np.ndarray],
+    canvas: tuple[int, int],
+    *,
+    top_limit_px: float,
+    zone: tuple[int, int] | None,
+    face: Box | None = None,
+    key: Sequence[int] = (),
+    variants: Sequence[CameraVariant] = (CameraVariant("base"),),
+    policy: OcclusionPolicy = DEFAULT_POLICY,
+) -> CompositionSearch:
+    """Judges a small deterministic grid: camera variant x layout (one or two lines) x a few sizes x centred/face axis x
+    heights anchored to the subject's silhouette (the text straddling its top by a few fixed fractions of its own height),
+    never a sweep of every pixel. A candidate is valid when the placement is legal (caption clearance, face, key word) AND
+    its `meaningful_occlusion` passes; the best valid one wins and ties keep the earlier candidate, so it is deterministic."""
+    width, height = canvas
+    out = CompositionSearch()
+    if not masks:
+        return out
+    bottom_limit = (zone[0] - policy.caption_clearance_px) if zone else height * 0.8
+    for variant in variants:
+        vmasks = [transform_mask(m, variant) for m in masks]
+        vface = transform_box(face, variant)
+        top = _silhouette_top(vmasks)
+        if top is None:
+            out.rejected["no_subject"] += 1
+            continue
+        face_bottom = None if vface is None else (vface[1] + vface[3]) * height
+        axes = _candidate_axes(canvas, vface, vmasks)
+        for layout in layouts:
+            sizes = _candidate_sizes(layout, canvas, policy)
+            if len(sizes) > policy.composition_sizes:
+                idx = np.linspace(0, len(sizes) - 1, policy.composition_sizes).round().astype(int)
+                sizes = [sizes[i] for i in sorted(set(idx.tolist()))]
+            for px in sizes:
+                alphas, _ = layout.scaled(px)
+                h, w = alphas[0].shape
+                for cx in axes:
+                    if cx - w / 2 < width * policy.side_margin_frac or cx + w / 2 > width * (1 - policy.side_margin_frac):
+                        out.rejected["side_margin"] += 1
+                        continue
+                    for frac in policy.composition_overlaps:
+                        cy = top - h / 2 + frac * h
+                        if cy - h / 2 < top_limit_px or cy + h / 2 > bottom_limit:
+                            out.rejected["outside_safe_band"] += 1
+                            continue
+                        out.considered += 1
+                        p = evaluate(layout, px, (cx, cy), vmasks, canvas, face=vface, zone=zone, key=key)
+                        if p is None:
+                            out.rejected["off_canvas"] += 1
+                            continue
+                        origin = (round(p.bounds[0]), round(p.bounds[1]))
+                        mo = meaningful_occlusion(alphas, px, origin, vmasks, face_bottom_px=face_bottom, policy=policy)
+                        reason = _violation(p, policy, policy.max_hidden, True)
+                        if reason == "no_depth":
+                            reason = None  # depth is judged by the stricter meaningful metric
+                        if reason is None and not mo.passed:
+                            reason = "not_meaningful"
+                        cand = CompositionCandidate(variant, p, mo, reason is None, 0.0, reason or "")
+                        cand.score = _composition_score(p, mo, canvas, policy)
+                        if reason:
+                            out.rejected[reason] += 1
+                            if out.closest is None or _closeness(cand) > _closeness(out.closest):
+                                out.closest = cand
+                            if reason == "not_meaningful" and variant.static and (out.near_miss is None or cand.score > out.near_miss.score + 1e-9):
+                                out.near_miss = cand
+                            continue
+                        out.valid += 1
+                        if out.best_any is None or cand.score > out.best_any.score + 1e-9:
+                            out.best_any = cand
+                        if variant.static and (out.best is None or cand.score > out.best.score + 1e-9):
+                            out.best = cand
+    return out

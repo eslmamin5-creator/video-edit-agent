@@ -31,6 +31,7 @@ from video_edit_agent.direction.camera_timeline import (
     static_claims,
     timeline_from_camera_plan,
 )
+from video_edit_agent.direction.composition import LowerSubjectComposition, review_state
 from video_edit_agent.direction.rhythm import (
     Occupied,
     RhythmPlan,
@@ -136,6 +137,10 @@ def enrich(plan: EditPlan, rhythm: RhythmPlan, transcript: Transcript, edl: EDL,
         row.behind_subject_candidate = verdict.candidate
         if pinned and slot is not None:  # the slot mirrors the row so the review shows the candidate state
             slot.semantic_source, slot.behind_subject_candidate = "user_pinned", verdict.candidate
+        if row.composition:  # a lower_subject that makes room for a headline: the headline leads, captions are reduced, nothing is approved
+            row.semantic_enhancement, row.primary_layer = "primary_headline_typography", "headline"
+            row.caption_role, row.speaker_visibility, row.approval_status = "reduced", "full", "pending_review"
+            row.semantic_source = "user_pinned" if row.semantic_source == "user_pinned" else "auto"
 
 
 def attach_rhythm(
@@ -150,6 +155,7 @@ def attach_rhythm(
     policy: RhythmPolicy | None = None,
     face_box: tuple[float, float, float, float] | None = None,
     evidence: Evidence | None = None,
+    compositions: list[LowerSubjectComposition] | None = None,
 ) -> RhythmPlan:
     """Plans the visual rhythm for `plan`, stores the enriched rows on it and returns the rhythm plan.
     Weak or absent semantic readings change nothing about the framing variation; they only decide which
@@ -157,7 +163,8 @@ def attach_rhythm(
     end = end if end is not None else max([transcript.duration, *[s.end for s in transcript.segments]])
     hints = [SemanticHint(start=b.start, end=b.end, kind=b.kind.value, confidence=b.confidence) for b in (semantic or [])]
     rhythm = plan_rhythm(transcript, start=start, end=end, policy=policy, hints=hints, face_box=face_box,
-                         occupied=owned_windows(plan, camera, start, end))
+                         occupied=owned_windows(plan, camera, start, end),
+                         compositions=[c for c in (compositions or []) if c.status == "ok"])
     enrich(plan, rhythm, transcript, edl, hints, evidence)
     plan.rhythm = rhythm.rows
     attach_camera_timeline(plan, rhythm, edl, camera=camera, face_box=face_box, start=start, end=end)
@@ -183,4 +190,4 @@ def attach_camera_timeline(
     reconcile_slots(plan.slots, plan.camera_timeline)
 
 
-__all__ = ["attach_camera_timeline", "attach_rhythm", "enrich", "owned_windows", "user_pinned"]
+__all__ = ["attach_camera_timeline", "attach_rhythm", "enrich", "owned_windows", "review_state", "user_pinned"]

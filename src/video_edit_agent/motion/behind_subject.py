@@ -57,12 +57,16 @@ from video_edit_agent.motion.legibility import (
 )
 from video_edit_agent.motion.occlusion import (
     DEFAULT_POLICY,
+    NOT_SUITABLE_FOR_SHOT,
+    CameraVariant,
     GlyphLayout,
     OcclusionPolicy,
     Placement,
     SearchResult,
     caption_zone,
     key_word_indices,
+    meaningful_occlusion,
+    search_composition,
     search_placement,
 )
 from video_edit_agent.motion.phrase_timing import (
@@ -112,6 +116,11 @@ class TreatmentPreset:
     max_lines: int = 3
     sample_fps: float = 10.0  # subject mask sampling over the short show window
     matte: MatteGatePolicy = DEFAULT_MATTE_POLICY  # when the subject matte is too unreliable to put text behind
+    # framings the composition search judges when the first placement is not meaningfully behind the subject; only the
+    # static one can be rendered today (the cutout renderer refuses a clip with a punch-in)
+    composition_variants: tuple[CameraVariant, ...] = (
+        CameraVariant("base"), CameraVariant("subtle_push", 1.08, 0.5, 0.30), CameraVariant("lower_subject", 1.2, 0.5, 0.0),
+    )
 
 
 DEFAULT_PRESET = TreatmentPreset()
@@ -335,6 +344,8 @@ class BehindSubjectPlan:
     reason: str = ""
     gate: dict = field(default_factory=dict)
     metrics: dict = field(default_factory=dict)
+    technical_status: str = ""  # passed | failed_meaningful_occlusion | ... (never an approval)
+    recommendation: str = ""  # an alternate treatment when the gate fails; the caller decides, nothing is replaced here
 
     @property
     def recommended(self) -> bool:
@@ -409,6 +420,52 @@ def plan_behind_subject(
     ]
 
 
+ALTERNATE_TREATMENTS = (
+    "alternate treatment (not applied automatically): primary headline above / head-adjacent, kinetic typography or speaker emphasis"
+)
+
+
+def _meaningful_gate(
+    placement: Placement, layouts: list[GlyphLayout], subject: SubjectData, canvas: tuple[int, int], top_limit: float,
+    zone: tuple[int, int] | None, face: Box | None, key: tuple[int, ...], preset: TreatmentPreset, gate: dict,
+) -> tuple[Placement, dict]:
+    """Judges whether the subject is REALLY in front of the words (glyph bodies, not edge contact). A placement that is
+    legal but not meaningful gets a small deterministic composition search; when nothing there passes either the gate
+    fails (`not_suitable_for_this_shot`) and the caller keeps its own fallback: it is never forced."""
+    layout = next((la for la in layouts if la.lines == placement.lines), layouts[0])
+    alphas, _ = layout.scaled(placement.font_px)
+    face_bottom = None if face is None else (face[1] + face[3]) * canvas[1]
+    first = meaningful_occlusion(
+        alphas, placement.font_px, (round(placement.bounds[0]), round(placement.bounds[1])), subject.masks,
+        face_bottom_px=face_bottom, policy=preset.occlusion,
+    )
+    if first.passed:
+        gate["meaningful_occlusion"] = _gate(True, f"{first.text_subject_overlap_ratio * 100:.1f}% behind, {first.visible_text_ratio * 100:.0f}% visible")
+        return placement, {"meaningful_occlusion": first.summary()}
+    search = search_composition(
+        layouts, subject.masks, canvas, top_limit_px=top_limit, zone=zone, face=face, key=key,
+        variants=preset.composition_variants, policy=preset.occlusion,
+    )
+    metrics = {
+        "meaningful_occlusion": first.summary(),
+        "composition_search": {
+            "status": search.status, "considered": search.considered, "valid": search.valid, "rejected": dict(search.rejected),
+            "closest": search.closest.summary() if search.closest else None,
+            "near_miss": search.near_miss.summary() if search.near_miss else None,
+            "best_any": search.best_any.summary() if search.best_any else None,
+        },
+    }
+    if search.best is not None:
+        gate["meaningful_occlusion"] = _gate(True, f"composition search ({search.best.camera.name}): {search.best.occlusion.text_subject_overlap_ratio * 100:.1f}% behind, {search.best.occlusion.visible_text_ratio * 100:.0f}% visible")
+        metrics["meaningful_occlusion"] = search.best.occlusion.summary()
+        metrics["composition_search"]["selected"] = search.best.summary()
+        return search.best.placement, metrics
+    gate["meaningful_occlusion"] = _gate(
+        False, f"{NOT_SUITABLE_FOR_SHOT}: " + "; ".join(first.reasons) + f" ({search.considered} composition candidates, none passed)",
+    )
+    return placement, metrics
+
+
 def _plan_slot(
     slot: EditPlanSlot, edl: EDL, brand: Brand | None, words: Sequence[Word], caption: CaptionInfo | None,
     probe: Probe | None, load_subject: SubjectLoader | None, preset: TreatmentPreset,
@@ -454,6 +511,11 @@ def _plan_slot(
         placement is not None,
         f"{search.considered} candidates; binding rule: {_binding(search)}" if placement is None else "ok",
     )
+    occ_metrics: dict = {}
+    if placement is not None and preset.occlusion.require_meaningful:
+        placement, occ_metrics = _meaningful_gate(
+            placement, layouts, subject, canvas, top_limit, zone, face, key, preset, gate,
+        )
     blocking = [name for name, g in gate.items() if not g["passed"] and name != "phrase_timing"]
 
     if placement is not None:
@@ -474,11 +536,17 @@ def _plan_slot(
                 extra={"decision": DECISION_BEHIND, "gate": gate},
             )
             return BehindSubjectPlan(
-                slot.number, DECISION_BEHIND, timing, spec, "readable occlusion within bounds", gate, placement.summary(),
+                slot.number, DECISION_BEHIND, timing, spec, "readable occlusion within bounds", gate,
+                {**placement.summary(), **occ_metrics}, technical_status="passed",
             )
 
     reason = f"{NOT_RECOMMENDED}: " + "; ".join(f"{n} ({gate[n]['detail']})" for n in blocking)
-    return _fallback(slot, timing, subject, layouts, canvas, top_limit, zone, face, key, brand, caption, preset, gate, reason)
+    fallback = _fallback(slot, timing, subject, layouts, canvas, top_limit, zone, face, key, brand, caption, preset, gate, reason)
+    fallback.metrics = {**fallback.metrics, **occ_metrics}
+    if "meaningful_occlusion" in blocking:
+        fallback.technical_status = "failed_meaningful_occlusion"
+        fallback.recommendation = ALTERNATE_TREATMENTS
+    return fallback
 
 
 def _backdrop(analysis: FrameAnalysis | None, placement: Placement, canvas: tuple[int, int]) -> tuple[float, float, float] | None:

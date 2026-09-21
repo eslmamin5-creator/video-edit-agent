@@ -306,7 +306,10 @@ def format_rhythm_map(plan: EditPlan) -> str:
                     ms = r.motion_start if r.motion_start is not None else r.start
                     me = r.motion_end if r.motion_end is not None else r.end
                     lines.append(f"  Motion: {r.state} [{r.motion_class}] {ms:.2f} -> {me:.2f}s | {_geometry(r)}")
-            lines.append(f"  Phrase boundary: {lead.boundary_kind} (quality {lead.boundary_quality:.2f}) before «{lead.boundary_after}»")
+            if lead.boundary_quality is not None:
+                lines.append(f"  Phrase boundary: {lead.boundary_kind} (quality {lead.boundary_quality:.2f}) before «{lead.boundary_after}»")
+            if lead.composition:
+                lines.append(f"  Composition treatment: {lead.composition} | headline «{lead.composition_detail.get('phrase', '')}»")
             lines.append(f"  Why now: {lead.history_reason}")
             lines.append(f"  Composition: {lead.composition_reason}")
             lines.append(f"  Return: {lead.reset_plan}")

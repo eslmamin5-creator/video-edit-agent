@@ -161,7 +161,8 @@ def test_9_a_visual_hold_plus_a_safe_boundary_may_trigger_low_risk_variation():
 
 # ---- anti-pattern memory ------------------------------------------------------------------
 def test_10_the_last_three_states_affect_selection():
-    exc = plan_rhythm(_long()).excursions()
+    # the memory rule needs the full excursion vocabulary: lower_subject is a scheduled state only when a policy asks for it
+    exc = plan_rhythm(_long(), policy=RhythmPolicy(plan_lower_subject=True)).excursions()
     assert len(set(exc)) >= 4
     for i in range(3, len(exc)):
         assert exc[i] not in exc[i - 3:i]
@@ -203,7 +204,7 @@ def test_14_zoom_values_do_not_accumulate():
 
 # ---- lower_subject ------------------------------------------------------------------------
 def _lower_row(face):
-    plan = plan_rhythm(_long(40), face_box=face)
+    plan = plan_rhythm(_long(40), face_box=face, policy=RhythmPolicy(plan_lower_subject=True))  # legacy opt-in
     return plan, next((r for r in plan.rows if r.state == "lower_subject"), None)
 
 

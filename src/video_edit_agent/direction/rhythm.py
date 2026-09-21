@@ -37,8 +37,10 @@ Nothing here is brand- or project-specific, and no reference timestamp is used.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import Enum
 from itertools import pairwise
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -141,6 +143,7 @@ class RhythmPolicy(BaseModel):
     min_top_margin: float = 0.03  # headroom a raise_subject must leave
     min_headroom_gain: float = 0.03  # a lower_subject must add at least this much face-top space (fraction of frame height)
     plan_raise_subject: bool = False  # raise_subject is planning-only (the renderer cannot pad above the source frame)
+    plan_lower_subject: bool = False  # lower_subject is a SEMANTIC COMPOSITION (it makes room for a headline); never free variety
     # smooth (gradual) motion
     smooth_entry_s: float = 0.9  # a smooth move glides in over this long
     return_min_s: float = 0.7  # a smooth return runs between these lengths and settles on its boundary
@@ -275,6 +278,17 @@ class Occupied(BaseModel):
     changes: tuple[float, ...] = ()  # when the picture visibly changes inside it (default: its start and end)
 
 
+class Composition(Protocol):
+    """A semantic composition placed by `direction.composition` (a lower_subject that makes room for a headline). The rhythm
+    engine plans AROUND it (it is a director-owned window) and inserts its rows verbatim: it never invents one."""
+
+    start: float
+    end: float
+    state: str
+    rows: list[RhythmRow]
+    changes: list[float]
+
+
 FaceBox = tuple[float, float, float, float]  # normalised x, y, w, h (the Reframe convention)
 
 
@@ -310,6 +324,8 @@ class RhythmRow(BaseModel):
     superseded_legacy: list[str] = Field(default_factory=list)
     semantic_source: str = "auto"  # auto | user_pinned
     behind_subject_candidate: str = ""
+    composition: str = ""  # a semantic composition this row belongs to (e.g. lower_subject_semantic); "" = plain rhythm
+    composition_detail: dict[str, Any] = Field(default_factory=dict)  # measured geometry / phrase / status of that composition
     boundary_kind: str = ""
     boundary_quality: float | None = None
     boundary_after: str = ""
@@ -623,11 +639,15 @@ def plan_rhythm(
     hints: list[SemanticHint] | None = None,
     face_box: FaceBox | None = None,
     boundaries: list[Boundary] | None = None,
+    compositions: Sequence[Composition] | None = None,
 ) -> RhythmPlan:
     """Plans the visual rhythm over [start, end]. Deterministic: the same inputs give the same plan. `hints` and
-    `face_box` are optional; without them the plan is the same low-risk variation, just with neutral semantic terms."""
+    `face_box` are optional; without them the plan is the same low-risk variation, just with neutral semantic terms.
+    `compositions` are pre-placed semantic compositions: planned around like any owned window, then inserted as they are."""
     policy = policy or RhythmPolicy()
-    occupied = occupied or []
+    compositions = list(compositions or [])
+    placed = [Occupied(start=c.start, end=c.end, label=c.state, changes=tuple(c.changes)) for c in compositions]
+    occupied = [*(occupied or []), *placed]
     hints = hints or []
     end = end if end is not None else max([transcript.duration, *[s.end for s in transcript.segments]])
     bounds = boundaries if boundaries is not None else find_boundaries(transcript)
@@ -658,7 +678,8 @@ def plan_rhythm(
             ext = _extension_pool(bounds, lo, latest, cursor, policy, hints) if extended else []
             near = [b for b in safe if b.t - cursor <= policy.horizon_s]
             pool = ext or near or safe[:1]  # nothing in reach: the hold extends to the next phrase boundary that exists
-            states = EXTENSION_STATES if ext else tuple(x for x in EXCURSIONS if x is not S.RAISE_SUBJECT or policy.plan_raise_subject)
+            states = EXTENSION_STATES if ext else tuple(
+                x for x in EXCURSIONS if (x is not S.RAISE_SUBJECT or policy.plan_raise_subject) and (x is not S.LOWER_SUBJECT or policy.plan_lower_subject))
             if not pool:
                 break
             best: tuple[float, S, Boundary, Boundary, float, dict[str, float], dict[str, str]] | None = None
@@ -666,6 +687,8 @@ def plan_rhythm(
             excluded: dict[str, str] = {}
             if not ext and not policy.plan_raise_subject:
                 excluded["raise_subject"] = "planning-only: the renderer cannot pad above the source frame"
+            if not ext and not policy.plan_lower_subject:
+                excluded["lower_subject"] = "a semantic composition (it makes room for a headline), never scheduled for variety alone"
             for b in pool:
                 hold = b.t - cursor
                 gap = b.t - last_excursion_start if last_excursion_start is not None else hold
@@ -730,15 +753,22 @@ def plan_rhythm(
             cursor = tile_from = tail.end
         if w1 - tile_from > 1e-6:
             tiles.append(RhythmRow(start=round(tile_from, 3), end=round(w1, 3), state=S.BASE.value))
-    _finish(plan, tiles, occupied, start, end)
+    _finish(plan, tiles, occupied, start, end, compositions)
     return plan
 
 
-def _finish(plan: RhythmPlan, tiles: list[RhythmRow], occupied: list[Occupied], start: float, end: float) -> None:
+def _finish(plan: RhythmPlan, tiles: list[RhythmRow], occupied: list[Occupied], start: float, end: float,
+            compositions: Sequence[Composition] = ()) -> None:
     """Interleaves the director-owned windows, tiles the timeline, and records every visible change."""
     rows = list(tiles)
+    placed = {(c.start, c.end, c.state) for c in compositions}
+    for c in compositions:
+        if c.end <= start or c.start >= end:
+            continue
+        rows.extend(c.rows)
+        plan.changes.extend(c.changes)
     for o in occupied:
-        if o.end <= start or o.start >= end:
+        if o.end <= start or o.start >= end or (o.start, o.end, o.label) in placed:
             continue
         rows.append(RhythmRow(start=o.start, end=o.end, state=o.label, source="pinned" if o.pinned else "director", approval_status="n/a"))
         plan.changes.extend(o.changes or (o.start, o.end))
@@ -820,6 +850,7 @@ __all__ = [
     "VOCABULARY",
     "WEIGHTS",
     "Boundary",
+    "Composition",
     "Occupied",
     "RhythmDecision",
     "RhythmPlan",

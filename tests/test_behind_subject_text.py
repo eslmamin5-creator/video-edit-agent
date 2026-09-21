@@ -99,7 +99,13 @@ def loader(masks=None, face=FACE, reason: str = "", seen: list | None = None):
     return load
 
 
+# These tests exercise timing, gating and text handling on a filled-box stand-in for glyphs, so the Phase 1.3.1
+# meaningful-occlusion judgement (which needs real glyph bodies) is off here; tests/test_phase131_b2_c2.py covers it.
+LEGACY = bs.TreatmentPreset(occlusion=occ.OcclusionPolicy(require_meaningful=False))
+
+
 def _plans(edl=None, plan=None, words=WORDS, caption=CAPTION, probe=fake_probe, load=None, brand=BRAND, **kw):
+    kw.setdefault("preset", LEGACY)
     return bs.plan_behind_subject(
         plan or _plan(), edl or _edl(_clip(0, 12)), brand, words=words, caption=caption, probe=probe,
         load_subject=load or loader(), **kw,
