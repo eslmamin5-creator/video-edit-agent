@@ -13,7 +13,16 @@ from video_edit_agent.direction.director import (
     VisualDecision,
     direct,
 )
+from video_edit_agent.direction.hierarchy import VisualHierarchy, build_hierarchy
+from video_edit_agent.direction.history import FatigueReading, TreatmentHistory
 from video_edit_agent.direction.replacement import SpeakerReplacement
+from video_edit_agent.direction.reset_grammar import CameraStory, camera_story
+from video_edit_agent.direction.semantic_beats import (
+    SemanticBeat,
+    SemanticKind,
+    detect_semantic_beats,
+    to_director_beats,
+)
 from video_edit_agent.direction.speed import SpeedEvent, plan_speed
 from video_edit_agent.direction.suitability import BehindSubjectEvidence, assess_behind_subject
 from video_edit_agent.direction.transitions import TransitionStyle, select_transition
@@ -27,14 +36,24 @@ __all__ = [
     "CameraMove",
     "CameraPlan",
     "CameraPolicy",
+    "CameraStory",
     "DirectionResult",
+    "FatigueReading",
+    "SemanticBeat",
+    "SemanticKind",
     "SpeakerReplacement",
     "SpeedEvent",
     "TransitionStyle",
+    "TreatmentHistory",
     "VisualDecision",
+    "VisualHierarchy",
     "assess_behind_subject",
+    "build_hierarchy",
+    "camera_story",
+    "detect_semantic_beats",
     "direct",
     "plan_camera",
     "plan_speed",
     "select_transition",
+    "to_director_beats",
 ]

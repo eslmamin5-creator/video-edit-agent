@@ -56,6 +56,27 @@ class SlotStatus(str, Enum):
     GENERATION_APPROVED = "generation_approved"  # the user explicitly allowed AI generation for this slot
 
 
+class BeatPlanning(BaseModel):
+    """Planning metadata the director attached to a slot (Phase 1). Advisory and reviewable:
+    nothing here renders anything or forces a treatment."""
+
+    beat_type: str | None = None  # topic_shift | key_claim | question | contrast | process_list | payoff | support
+    beat_confidence: float | None = None
+    beat_confidence_label: str | None = None  # low | medium | high
+    beat_cues: list[str] = Field(default_factory=list)  # why the detector thinks so (verbatim evidence)
+    previous_state: str = ""  # what the viewer saw just before this beat
+    variation_desirable: bool = False  # the SOFT fatigue signal: advisory, never forces a change
+    variation_reason: str = ""
+    camera_incoming: str = "base"  # the framing when the beat starts
+    camera_event: str = "static"  # what the treatment asks of the camera (absolute level)
+    camera_release: str = "none"  # reset_to_base | slow_pull | return_to_base | none
+    camera_sequence: list[str] = Field(default_factory=list)  # base -> punch -> hold -> reset, spelled out
+    primary_layer: str = "speaker"  # speaker | replacement_visual | headline
+    headline_role: str = "none"  # none | primary_headline_typography
+    headline_placement: str | None = None  # top | head_adjacent | behind_subject | full_screen
+    speaker_visibility: str = "full"  # full | partial | hidden
+
+
 class EditPlanSlot(BaseModel):
     number: int = 0  # 1-based, what the user types; 0 = settled elsewhere / no special treatment
     timeline_start: float
@@ -85,12 +106,17 @@ class EditPlanSlot(BaseModel):
     caption_behavior: str = "normal"  # normal | reduced (never hidden)
     sound_intent: str = "none"
     sound_event: str | None = None  # the visual event a sound could sit on
-    sound_status: str = "none"  # none | suppressed | unavailable | scheduled
+    sound_status: str = "none"  # none | suppressed | unavailable_fallback_none | scheduled
+    # unavailable_fallback_none: an intent was chosen but no real, resolved asset exists, so the slot
+    # plays NOTHING (the intent is kept for a future asset pack). Never shown as audible.
     sound_importance: float | None = None  # the beat's semantic weight (None = the event type's default)
     sound_locked: bool = False  # the user chose the sound intent explicitly
     sfx_availability: str = "none"
     beat_kind: str | None = None
     direction_notes: list[str] = Field(default_factory=list)
+    planning: BeatPlanning | None = None  # semantic beat / fatigue / reset / hierarchy metadata (Phase 1)
+    review_required: bool = False  # a decision you made conflicts with the new plan: it needs your answer
+    review_note: str = ""
 
     @property
     def duration(self) -> float:
@@ -313,7 +339,9 @@ def approve_slot(slot: EditPlanSlot) -> EditPlanSlot:
     A slot the user turned down stays rejected."""
     if slot.treatment == NO_TREATMENT or slot.status is SlotStatus.REJECTED:
         slot.treatment, slot.status = NO_TREATMENT, SlotStatus.REJECTED
+        slot.review_required = False
         return slot
+    slot.review_required = False  # the reviewer has now answered the conflict
     slot.status = _after_choice(slot, SlotStatus.APPROVED if slot.treatment == slot.recommended else SlotStatus.CHANGED)
     return slot
 
@@ -329,6 +357,7 @@ def set_treatment(slot: EditPlanSlot, treatment: str) -> EditPlanSlot:
     if treatment != _GENERATED:
         slot.generation_approved = False  # generation was for the generated treatment only
     slot.treatment = treatment
+    slot.review_required = False
     slot.status = _after_choice(slot, SlotStatus.APPROVED if treatment == slot.recommended else SlotStatus.CHANGED)
     return slot
 
@@ -344,6 +373,7 @@ def set_sound_intent(slot: EditPlanSlot, intent: str) -> EditPlanSlot:
 
 def reject_slot(slot: EditPlanSlot) -> EditPlanSlot:
     slot.treatment, slot.status, slot.generation_approved = NO_TREATMENT, SlotStatus.REJECTED, False
+    slot.review_required = False
     return slot
 
 

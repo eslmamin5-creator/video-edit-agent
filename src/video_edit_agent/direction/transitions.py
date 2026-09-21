@@ -1,6 +1,6 @@
 """Transition grammar: the default is a hard, invisible cut.
 
-A stylized transition (whip / zoom / blur / flash / slide) is only allowed when
+A stylized transition (whip / zoom / blur / flash / slide / light leak) is only allowed when
 it supports one of four reasons, and only in the styles that fit that reason:
 
     motion_continuity   the outgoing and incoming shots move the same way
@@ -13,7 +13,8 @@ purpose: a request that does not fit its reason simply gets the direct cut.
 
 The renderer currently executes only hard cuts (and the crossfade the Assembler
 already uses); `STYLIZED_EXECUTABLE` is empty, so a planned stylized transition
-is shown to the reviewer together with the direct cut that actually plays.
+is shown to the reviewer together with the direct cut that actually plays
+(a light leak is a supported intent only: it is never the default for a reason).
 
 Nothing here is brand- or project-specific.
 """
@@ -31,6 +32,7 @@ class TransitionStyle(str, Enum):
     BLUR = "blur"
     FLASH = "flash"
     SLIDE = "slide"
+    LIGHT_LEAK = "light_leak"  # a supported INTENT only: recorded in the plan, no renderer yet
 
 
 class TransitionReason(str, Enum):
@@ -43,13 +45,13 @@ class TransitionReason(str, Enum):
 # reason -> allowed styles, the first being the default for that reason.
 ALLOWED: dict[TransitionReason, tuple[TransitionStyle, ...]] = {
     TransitionReason.MOTION_CONTINUITY: (TransitionStyle.WHIP, TransitionStyle.ZOOM),
-    TransitionReason.SEMANTIC_CHANGE: (TransitionStyle.BLUR, TransitionStyle.SLIDE),
+    TransitionReason.SEMANTIC_CHANGE: (TransitionStyle.BLUR, TransitionStyle.SLIDE, TransitionStyle.LIGHT_LEAK),
     TransitionReason.SPATIAL_CONTINUITY: (TransitionStyle.SLIDE, TransitionStyle.ZOOM),
-    TransitionReason.DELIBERATE_REVEAL: (TransitionStyle.FLASH, TransitionStyle.BLUR),
+    TransitionReason.DELIBERATE_REVEAL: (TransitionStyle.FLASH, TransitionStyle.BLUR, TransitionStyle.LIGHT_LEAK),
 }
 DURATION_S = {
     TransitionStyle.DIRECT_CUT: 0.0, TransitionStyle.WHIP: 0.25, TransitionStyle.ZOOM: 0.3,
-    TransitionStyle.BLUR: 0.3, TransitionStyle.FLASH: 0.15, TransitionStyle.SLIDE: 0.3,
+    TransitionStyle.BLUR: 0.3, TransitionStyle.FLASH: 0.15, TransitionStyle.SLIDE: 0.3, TransitionStyle.LIGHT_LEAK: 0.35,
 }
 MIN_GAP_BETWEEN_STYLIZED_S = 8.0
 STYLIZED_EXECUTABLE: frozenset[TransitionStyle] = frozenset()

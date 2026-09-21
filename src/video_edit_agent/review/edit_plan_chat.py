@@ -176,8 +176,40 @@ def format_slot(slot: EditPlanSlot, lang: str = "ar") -> str:
         lines.extend(_text_lines(slot, ar))
     if slot.alternatives and slot.status is SlotStatus.PENDING_REVIEW:
         lines.append(("بدائل: " if ar else "Alternatives: ") + " / ".join(label(a, lang) for a in slot.alternatives))
-    lines.append(f"Status: {_STATUS[slot.status]}" if not slot.settled else f"Status: {_STATUS[slot.status]} — {slot.settled_reason}")
+    status = "REVIEW_REQUIRED" if slot.review_required else _STATUS[slot.status]
+    lines.append(f"Status: {status}" if not slot.settled else f"Status: {status} — {slot.settled_reason}")
+    if slot.review_required and slot.review_note:
+        lines.append(f"Conflict: {slot.review_note}")
     return "\n".join(lines)
+
+
+_SOUND_STATUS_LABEL = {
+    "none": "none",
+    "suppressed": "suppressed (the sound profile leaves it out: nothing plays)",
+    "unavailable_fallback_none": "unavailable_fallback_none (no real asset exists: NOTHING will be heard; the intent is kept for a future pack)",
+    "scheduled": "scheduled (a real asset will play)",
+}
+
+
+def _planning_lines(slot: EditPlanSlot) -> list[str]:
+    """The semantic beat, the soft fatigue reading, the camera story and the visual hierarchy (Phase 1
+    planning metadata; advisory, nothing here renders)."""
+    pl = slot.planning
+    if pl is None:
+        return []
+    beat = pl.beat_type or "n/a"
+    if pl.beat_confidence is not None:
+        beat += f" ({pl.beat_confidence_label} confidence {pl.beat_confidence:.2f})"
+    lines = [f"Semantic beat: {beat}"]
+    if pl.previous_state:
+        lines.append(f"Before this: {pl.previous_state}")
+    lines.append(f"Variation desirable: {'YES' if pl.variation_desirable else 'no'} — {pl.variation_reason}")
+    lines.append(f"Camera: incoming {pl.camera_incoming}; event {pl.camera_event}; release {pl.camera_release}")
+    if pl.camera_sequence:
+        lines.append("Camera plan: " + " -> ".join(pl.camera_sequence))
+    head = pl.headline_role if pl.headline_placement is None else f"{pl.headline_role} @ {pl.headline_placement}"
+    lines.append(f"Primary visual: {pl.primary_layer} | headline: {head} | speaker: {pl.speaker_visibility}")
+    return lines
 
 
 def _direction_lines(slot: EditPlanSlot, ar: bool) -> list[str]:
@@ -189,13 +221,16 @@ def _direction_lines(slot: EditPlanSlot, ar: bool) -> list[str]:
     caption += f", {slot.caption_behavior}" if slot.caption_behavior != "normal" else ""
     mine = (" (your choice)" if not ar else " (اختيارك)") if slot.sound_locked else ""
     return [
+        *_planning_lines(slot),
         f"Visual: {label(slot.treatment, 'ar' if ar else 'en')}",
         f"Speaker: {speaker}",
         f"Camera: {_CAMERA_LABEL.get(slot.camera, slot.camera)}",
         f"Transition: {direction.transition_label(slot)}",
         f"Sound intent: {_INTENT_LABEL.get(slot.sound_intent, (slot.sound_intent,) * 2)[i]}{mine}",
+        f"Sound status: {_SOUND_STATUS_LABEL.get(slot.sound_status, slot.sound_status)}",
         f"SFX availability: {slot.sfx_availability or 'none'}",
         f"Caption behavior: {caption}",
+        f"Caption role: {slot.caption_behavior}",
         *[f"Note: {n}" for n in slot.direction_notes],
     ]
 
@@ -412,7 +447,7 @@ class EditPlanChat:
         intent = _INTENT_LABEL.get(slot.sound_intent, (slot.sound_intent,) * 2)[i]
         line = f"✔ [{n}] " + (f"الصوت: {intent}" if ar else f"Sound: {intent}")
         if slot.sound_intent != "none":
-            line += f" — SFX: {slot.sfx_availability or 'none'}"
+            line += f" — SFX: {slot.sfx_availability or 'none'} [{slot.sound_status}]"
         return line
 
     def _needs_text(self, slot: EditPlanSlot, *, changed: bool = False) -> str:
@@ -439,7 +474,11 @@ class EditPlanChat:
     def _approve_rest(self, plan: EditPlan) -> ChatReply:
         ar = self.lang == "ar"
         done, blocked, notes = [], [], []
+        conflicts: list[int] = []
         for slot in plan.pending():
+            if slot.review_required:
+                conflicts.append(slot.number)  # a conflict with your own earlier decision needs your answer
+                continue
             if slot.needs_text:
                 blocked.append(slot.number)
                 continue
@@ -454,7 +493,10 @@ class EditPlanChat:
         if blocked:
             lines.append(f"محتاجين النص الأول: {', '.join(map(str, blocked))}" if ar
                           else f"Need the exact text first: {', '.join(map(str, blocked))}")
-        if not done and not blocked:
+        if conflicts:
+            lines.append(f"REVIEW_REQUIRED (مش هاعتمدها لوحدي): {', '.join(map(str, conflicts))}" if ar
+                          else f"REVIEW_REQUIRED (not approved in bulk): {', '.join(map(str, conflicts))}")
+        if not done and not blocked and not conflicts:
             lines.append("مفيش قرارات مفتوحة." if ar else "No open decisions.")
         return self._show(plan, cmd.Command(cmd.KIND_SHOW, view=cmd.VIEW_PENDING), prefix="\n".join([*lines, *notes]), changed=bool(done))
 

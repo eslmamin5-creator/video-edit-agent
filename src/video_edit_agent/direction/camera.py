@@ -131,7 +131,8 @@ def plan_camera(requests: list[CameraRequest], policy: CameraPolicy | None = Non
         if pending is None or state["zoom"] <= BASE_ZOOM + 1e-6:
             return
         due = min((pending.beat_end or now), pending.end + policy.max_hold_s, now)
-        beat = CameraRequest(start=pending.beat_start or due, end=pending.beat_end or due)
+        # a beat that starts at 0.0 is a real start: `or` would treat it as missing
+        beat = CameraRequest(start=due if pending.beat_start is None else pending.beat_start, end=due if pending.beat_end is None else pending.beat_end)
         emit(max(due, pending.end), max(due, pending.end) + policy.ease_s, CameraMove.RESET_TO_BASE, BASE_ZOOM, BASE_ANCHOR_X, beat)
 
     for req in sorted(requests, key=lambda r: (r.start, -r.importance)):

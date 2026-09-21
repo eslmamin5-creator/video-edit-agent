@@ -33,6 +33,9 @@ from video_edit_agent.direction.camera import (
     CameraRequest,
     plan_camera,
 )
+from video_edit_agent.direction.hierarchy import VisualHierarchy, build_hierarchy
+from video_edit_agent.direction.history import FatigueReading, TreatmentHistory
+from video_edit_agent.direction.reset_grammar import CameraStory, camera_story
 from video_edit_agent.direction.suitability import (
     BehindSubjectEvidence,
     Suitability,
@@ -42,6 +45,7 @@ from video_edit_agent.direction.transitions import (
     DIRECT,
     TransitionChoice,
     TransitionReason,
+    TransitionStyle,
     select_transition,
 )
 from video_edit_agent.direction.vocabulary import (
@@ -63,6 +67,12 @@ from video_edit_agent.sound.registry import SfxRegistry
 PUNCH_IN_EVENT_S = 0.42  # the ease length the sound is aligned to
 MIN_PUSH_BEAT_S = 6.0  # a static beat at least this long may get a slow push
 MAX_CONSECUTIVE_REPLACEMENTS = 1  # the speaker comes back before the next replacement
+LOW_CONFIDENCE = 0.45  # a semantic classification below this is a guess: it never buys a treatment
+HIGH_CONFIDENCE = 0.7
+STRONG_AFTER_STRONG_IMPORTANCE = 0.75  # a beat this important may still follow a strong one
+_ZOOMING = frozenset({SpeakerTreatment.PUNCH_IN.value, SpeakerTreatment.SLOW_PUSH.value, SpeakerTreatment.REFRAME.value})
+_EMPHASIS_ON_SPEAKER = _ZOOMING | {OverlayTreatment.BEHIND_SUBJECT_TEXT.value}  # emphasis laid over the speaker
+_MEANINGFUL_KINDS = frozenset({"key_claim", "payoff", "contrast", "process_list", "topic_shift"})
 
 
 class BeatKind(str, Enum):
@@ -88,9 +98,16 @@ class Beat(BaseModel):
     has_footage: bool = False  # real/user footage that fits is already available
     prefer: str | None = None  # a vocabulary treatment the reviewer/AI proposes
     transition_reason: TransitionReason | None = None
+    transition_style: TransitionStyle | None = None  # an explicit style intent for the boundary (e.g. light_leak)
     sound_intent: SoundIntent | None = None  # None = the event's default
     sound_locked: bool = False  # the reviewer chose the sound intent explicitly
     evidence: BehindSubjectEvidence | None = None  # measured facts for the behind-subject gate
+    # ---- planning context (all optional; a beat supplied as plain data works as before) ----
+    semantic_kind: str | None = None  # from the semantic beat detector
+    semantic_confidence: float | None = None
+    semantic_cues: list[str] = Field(default_factory=list)
+    speaker_motion: float = 0.0  # 0..1, how much the speaker visibly moves (unknown = 0)
+    pinned: bool = False  # the reviewer already decided this beat: history records it, nothing overrides it
 
     @property
     def duration(self) -> float:
@@ -113,6 +130,16 @@ class VisualDecision(BaseModel):
     notes: list[str] = Field(default_factory=list)
     beat_kind: str = BeatKind.PLAIN.value
     suitability: Suitability | None = None
+    # ---- semantic / history / reset / hierarchy planning metadata ----
+    semantic_kind: str | None = None
+    semantic_confidence: float | None = None
+    semantic_cues: list[str] = Field(default_factory=list)
+    fatigue: FatigueReading | None = None
+    variation_desirable: bool = False
+    variation_reason: str = ""
+    camera_story: CameraStory | None = None
+    hierarchy: VisualHierarchy | None = None
+    pinned: bool = False
 
     @property
     def klass(self) -> str:
@@ -218,6 +245,69 @@ def _sound_event(decision: VisualDecision, beat: Beat, index: int) -> VisualEven
     )
 
 
+def _semantic_reason(beat: Beat) -> bool:
+    """Does this beat mean something a treatment could serve? Never true for a low-confidence guess."""
+    if beat.semantic_confidence is not None and beat.semantic_confidence < LOW_CONFIDENCE:
+        return False
+    if beat.semantic_kind is not None:
+        return beat.semantic_kind in _MEANINGFUL_KINDS
+    return beat.kind is not BeatKind.PLAIN and beat.kind is not BeatKind.PERSONAL
+
+
+def _alternatives_in_reach(
+    treatment: str, alternatives: list[str], beat: Beat, history: TreatmentHistory, *, replacement_blocked: bool, semantic: bool,
+) -> list[str]:
+    """Alternatives that could really be executed now: in the vocabulary, needing no external asset
+    and no generation, not blocked by the replacement-spacing rule and not a recent repeat."""
+    pool = list(alternatives)
+    if semantic and treatment == SpeakerTreatment.SPEAKER_STATIC.value:
+        pool.append(SpeakerTreatment.PUNCH_IN.value)  # a beat that means something can be marked by the framing
+    out: list[str] = []
+    for alt in dict.fromkeys(pool):
+        if alt == treatment or not is_vocabulary(alt) or alt in ASSET_TREATMENTS or alt in GENERATED_TREATMENTS:
+            continue
+        if treatment_class(alt) == "replacement" and replacement_blocked:
+            continue
+        if alt in _ZOOMING and history.repetitions(alt):
+            continue
+        out.append(alt)
+    return out
+
+
+def _soften(beat: Beat, treatment: str, history: TreatmentHistory, reserved: tuple[float, ...] = (), min_gap_s: float = 0.0) -> str | None:
+    """Why `treatment` should give way to the calmer speaker shot, given what the viewer just saw
+    (None = it stands). A treatment the reviewer chose is never softened."""
+    if beat.prefer or beat.pinned:
+        return None
+    if treatment in _ZOOMING and (ahead := next((r for r in reserved if 0.0 < r - beat.start < min_gap_s), None)) is not None:
+        return f"the reviewer's own camera move starts {ahead - beat.start:.1f}s later: two moves this close would crowd it"
+    if treatment in _ZOOMING and (n := history.repetitions(treatment)):
+        return f"'{treatment}' was already used {n}x in the last few beats: a repeated camera emphasis wears thin"
+    static = SpeakerTreatment.SPEAKER_STATIC.value
+    if beat.semantic_confidence is not None and beat.semantic_confidence < LOW_CONFIDENCE and treatment != static:
+        return f"the classification is low-confidence ({beat.semantic_confidence:.2f}): a guess never buys a treatment"
+    prev = history.previous
+    if prev is not None and prev.strong and treatment in _EMPHASIS_ON_SPEAKER and beat.importance < STRONG_AFTER_STRONG_IMPORTANCE:
+        return "the previous beat already used strong emphasis and this one is not important enough to follow it at the same strength"
+    return None
+
+
+def _variation_text(d: VisualDecision, reading: FatigueReading, wanted: str) -> str:
+    """The reviewer-facing sentence for the soft fatigue reading, including what was (not) done about it."""
+    applied = d.treatment != SpeakerTreatment.SPEAKER_STATIC.value or d.camera is not CameraMove.STATIC
+    if not reading.variation_desirable:
+        if applied:  # the reading was about a fresh look; this beat already carries one
+            return f"no further variation needed: this beat already carries {d.treatment}" + (" (your choice)" if d.pinned else "")
+        return reading.variation_reason
+    if applied:
+        tail = f" -> applied: {d.treatment}"
+    elif d.alternatives:
+        tail = f" -> advisory only, not applied (options: {', '.join(d.alternatives[:3])})"
+    else:
+        tail = " -> advisory only, not applied"
+    return reading.variation_reason + tail + (f" [{wanted} was softened]" if wanted != d.treatment else "")
+
+
 def direct(
     beats: list[Beat],
     *,
@@ -227,55 +317,81 @@ def direct(
 ) -> DirectionResult:
     """Directs `beats` (time-ordered): treatment, camera, transition, caption behaviour and sound.
 
+    Beat by beat it remembers what the viewer has just seen (`TreatmentHistory`): a repeated camera
+    emphasis, or a strong beat right after a strong beat, is softened to the speaker, and a SOFT
+    fatigue reading (`variation_desirable`) is recorded. Nothing is forced because time passed.
+    Every decision also carries its camera story (incoming state, event, release) and hierarchy.
+
     Deterministic: the same beats, policy, profile and registry give the same result."""
     ordered = sorted(beats, key=lambda b: b.start)
     decisions: list[VisualDecision] = []
+    requests: list[CameraRequest] = []
+    history = TreatmentHistory(origin=ordered[0].start if ordered else 0.0)
     replacements_in_a_row = 0
+    static = SpeakerTreatment.SPEAKER_STATIC.value
+    # camera moves the reviewer chose come first: a proposal right before one gives way to it
+    reserved = tuple(b.start for b in ordered if b.pinned and b.prefer in _CAMERA_FOR)
+    gap = (camera_policy or CameraPolicy()).min_gap_s
     for beat in ordered:
         treatment, reason, alternatives, verdict = _choose(beat)
+        wanted = treatment
         notes: list[str] = []
+        semantic = _semantic_reason(beat)
+        soft = _soften(beat, treatment, history, reserved, gap)
+        if soft:
+            notes.append(f"{treatment} not used: {soft}")
+            alternatives = [treatment, *[a for a in alternatives if a != treatment]]
+            treatment, reason = static, f"kept on the speaker ({soft})"
         klass = treatment_class(treatment)
-        if klass == "replacement" and replacements_in_a_row >= MAX_CONSECUTIVE_REPLACEMENTS:
+        blocked = replacements_in_a_row >= MAX_CONSECUTIVE_REPLACEMENTS
+        if klass == "replacement" and blocked:
             notes.append(f"{treatment} dropped: the speaker must return before another replacement")
             alternatives = [treatment, *[a for a in alternatives if a != treatment]]
-            treatment, reason, klass = SpeakerTreatment.SPEAKER_STATIC.value, "kept on the speaker (replacement spacing rule)", "speaker"
+            treatment, reason, klass = static, "kept on the speaker (replacement spacing rule)", "speaker"
         replacements_in_a_row = replacements_in_a_row + 1 if klass == "replacement" and not default_speaker_visible(treatment) else 0
-        decisions.append(VisualDecision(
+        reach = _alternatives_in_reach(treatment, alternatives, beat, history, replacement_blocked=blocked, semantic=semantic)
+        reading = history.read(beat.start, wanted, semantic_reason=semantic, alternative_available=bool(reach), speaker_motion=beat.speaker_motion)
+        d = VisualDecision(
             start=beat.start, end=beat.end, treatment=treatment, speaker_visible=default_speaker_visible(treatment),
-            reason=reason, alternatives=[a for a in alternatives if a != treatment],
+            reason=reason, alternatives=[a for a in dict.fromkeys([*alternatives, *reach]) if a != treatment],
             needs_asset=treatment in ASSET_TREATMENTS, needs_generation=treatment in GENERATED_TREATMENTS,
-            caption_behavior="reduced" if treatment in STRONG_PRIMARY else "normal", notes=notes,
-            beat_kind=beat.kind.value, suitability=verdict,
-        ))
+            notes=notes, beat_kind=beat.kind.value, suitability=verdict,
+            semantic_kind=beat.semantic_kind, semantic_confidence=beat.semantic_confidence, semantic_cues=list(beat.semantic_cues),
+            fatigue=reading, variation_desirable=reading.variation_desirable, pinned=beat.pinned,
+        )
+        # camera for this beat: absolute, spaced, reset after emphasis. plan_camera is sequential, so
+        # the plan of the beats so far is the prefix of the final plan.
+        if d.speaker_visible or treatment in _CAMERA_FOR:
+            requests.append(CameraRequest(start=d.start, end=d.end, move=_CAMERA_FOR.get(treatment, CameraMove.STATIC), importance=beat.importance))
+        wanted_move = _CAMERA_FOR.get(treatment)
+        if d.klass != "replacement" and d.speaker_visible and wanted_move is not None:
+            so_far = plan_camera(requests, camera_policy)
+            kept = next((e.move for e in so_far.events if e.beat_start is not None and abs(e.beat_start - d.start) < 1e-3
+                         and e.move not in {CameraMove.RESET_TO_BASE, CameraMove.PUNCH_OUT}), None)
+            if kept is not None:
+                d.camera = kept
+            else:
+                drop = next((x for x in so_far.dropped if abs(x.start - d.start) < 1e-3), None)
+                d.notes.append(f"camera move dropped: {drop.reason if drop else 'no room in the camera plan'}")
+                d.treatment, d.reason = static, d.reason + " (camera density rule: stay static)"
+        d.variation_reason = _variation_text(d, reading, wanted)
+        history.record(d.start, d.end, d.treatment, d.camera.value, d.speaker_visible, pinned=beat.pinned)
+        decisions.append(d)
 
-    # ---- camera: absolute, spaced, reset after emphasis --------------------------------
-    requests = [
-        CameraRequest(start=d.start, end=d.end, move=_CAMERA_FOR.get(d.treatment, CameraMove.STATIC), importance=b.importance)
-        for d, b in zip(decisions, ordered, strict=True) if d.speaker_visible or d.treatment in _CAMERA_FOR
-    ]
     camera = plan_camera(requests, camera_policy)
-    dropped = {(round(x.start, 3)): x for x in camera.dropped}
-    kept = {round(e.beat_start, 3): e.move for e in camera.events if e.beat_start is not None and e.move not in {CameraMove.RESET_TO_BASE, CameraMove.PUNCH_OUT}}
     for d in decisions:
-        if not d.speaker_visible or d.klass == "replacement":
-            continue
-        wanted = _CAMERA_FOR.get(d.treatment)
-        if wanted is None:
-            continue
-        move = kept.get(round(d.start, 3))
-        if move is None:
-            drop = dropped.get(round(d.start, 3))
-            d.notes.append(f"camera move dropped: {drop.reason if drop else 'no room in the camera plan'}")
-            d.treatment, d.reason = SpeakerTreatment.SPEAKER_STATIC.value, d.reason + " (camera density rule: stay static)"
-        else:
-            d.camera = move
+        replaced = d.klass == "replacement" and not d.speaker_visible
+        d.camera_story = camera_story(camera, start=d.start, end=d.end, move=d.camera, replaced=replaced)
+        d.hierarchy = build_hierarchy(d.treatment, d.speaker_visible, gate_passed=d.suitability.suitable if d.suitability else None)
+        d.caption_behavior = d.hierarchy.caption_role
 
     # ---- transitions: direct cut unless justified --------------------------------------
     last_stylized: float | None = None
     for d, b in zip(decisions, ordered, strict=True):
-        if d.klass != "replacement" or d.speaker_visible:
+        replaced = d.klass == "replacement" and not d.speaker_visible
+        if not replaced and b.transition_style is None:
             continue
-        choice = select_transition(b.transition_reason, at=d.start, previous_stylized_at=last_stylized)
+        choice = select_transition(b.transition_reason, b.transition_style, at=d.start, previous_stylized_at=last_stylized)
         d.transition = choice
         if choice.stylized:
             last_stylized = d.start
@@ -311,6 +427,6 @@ def coerce_intent(value: str | None) -> SoundIntent:
 
 
 __all__ = [
-    "MAX_CONSECUTIVE_REPLACEMENTS", "PUNCH_IN_EVENT_S", "Beat", "BeatKind", "DirectionResult", "VisualDecision",
+    "HIGH_CONFIDENCE", "LOW_CONFIDENCE", "MAX_CONSECUTIVE_REPLACEMENTS", "PUNCH_IN_EVENT_S", "Beat", "BeatKind", "DirectionResult", "VisualDecision",
     "availability", "coerce_intent", "direct", "sound_event_for",
 ]

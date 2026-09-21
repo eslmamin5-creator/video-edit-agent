@@ -99,7 +99,7 @@ def test_every_beat_becomes_a_slot_that_records_the_visual_and_the_sound_decisio
     assert [(s.timeline_start, s.timeline_end) for s in plan.slots] == [(b.start, b.end) for b in BEATS]
     for slot in plan.slots:
         assert slot.directed and slot.beat_kind and slot.camera and slot.transition
-        assert slot.sound_intent in ep.SOUND_INTENTS and slot.sound_status in {"none", "suppressed", "unavailable", "scheduled"}
+        assert slot.sound_intent in ep.SOUND_INTENTS and slot.sound_status in {"none", "suppressed", "unavailable_fallback_none", "scheduled"}
         assert slot.caption_behavior in {"normal", "reduced"}
     assert plan.sound_profile == "minimal"
     assert plan.slots[0].spoken_context.startswith("أهلا")  # the approved transcript, verbatim
@@ -192,7 +192,7 @@ def test_with_no_registry_every_sound_is_honestly_unavailable_or_none():
         if slot.sound_intent == "none":
             assert slot.sound_status == "none"
         else:
-            assert slot.sound_status == "unavailable"
+            assert slot.sound_status == "unavailable_fallback_none"
             assert "no" in (slot.sfx_availability or "").lower() or "unavailable" in (slot.sfx_availability or "").lower()
 
 
@@ -230,7 +230,7 @@ def test_syncing_is_deterministic(pack):
 
 def test_a_silent_profile_keeps_every_slot_silent(pack):
     plan = _plan("none", pack)
-    assert all(s.sound_status in {"none", "suppressed", "unavailable"} for s in plan.slots)
+    assert all(s.sound_status in {"none", "suppressed", "unavailable_fallback_none"} for s in plan.slots)
     assert not any(s.sound_status == "scheduled" for s in plan.slots)
 
 
