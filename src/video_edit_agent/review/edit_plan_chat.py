@@ -271,12 +271,24 @@ def _text_lines(slot: EditPlanSlot, ar: bool) -> list[str]:
     return ["Text options (from what the speaker said):", *opts]
 
 
+def _geometry(r) -> str:
+    if r.state in ("base", "hold") or not r.moving:
+        return "base framing (zoom 1.000)" if r.state == "base" else f"held at zoom {r.zoom_to:.3f}, anchor ({r.anchor_x:.2f}, {'default' if r.anchor_y is None else f'{r.anchor_y:.2f}'})"
+    ay = "default" if r.anchor_y is None else f"{r.anchor_y:.2f}"
+    g = f"zoom {r.zoom_from:.3f} -> {r.zoom_to:.3f}, anchor_x {r.anchor_x_from if r.anchor_x_from is not None else r.anchor_x:.2f} -> {r.anchor_x:.2f}, anchor_y {ay}"
+    if r.state == "lower_subject" and r.safe_headroom is not None:
+        g += f", headroom +{r.headroom_gain:.3f} (face top {r.safe_headroom:.3f}, face bottom {r.face_bottom:.3f})"
+    return g
+
+
 def format_rhythm_map(plan: EditPlan) -> str:
-    """The visual rhythm map: one entry per planned state change (an excursion shows its move, hold and return together).
-    Planning metadata only: nothing here renders, and none of it blocks review."""
+    """The visual rhythm map: one entry per planned state change, showing the EXACT camera event that will render (motion
+    start/end, both states, executable status, the legacy events it supersedes) and the semantic / behind-subject state."""
     if not plan.rhythm:
         return ""
-    out = ["Visual rhythm map (framing variation; proposals, nothing renders yet)"]
+    tl = plan.camera_timeline
+    ready = "unknown (no camera timeline)" if tl is None else "yes" if not plan.render_blockers() else "NO"
+    out = [f"Visual rhythm map (the executable camera plan) | camera render-ready: {ready}"]
     for group in entries(plan.rhythm):
         lead, last = group[0], group[-1]
         chain = " -> ".join(dict.fromkeys(r.state for r in group))
@@ -287,21 +299,39 @@ def format_rhythm_map(plan: EditPlan) -> str:
         if lead.transcript_context:
             lines.append(f"  Spoken: «{lead.transcript_context[:110]}»")
         if lead.source == "rhythm" and lead.state != "base":
+            status = "/".join(dict.fromkeys(r.status for r in group))
+            lines.append(f"  Status: {status}" + (f" ({lead.status_reason})" if lead.status_reason and status != "executable" else ""))
+            for r in group:
+                if r.moving:
+                    ms = r.motion_start if r.motion_start is not None else r.start
+                    me = r.motion_end if r.motion_end is not None else r.end
+                    lines.append(f"  Motion: {r.state} [{r.motion_class}] {ms:.2f} -> {me:.2f}s | {_geometry(r)}")
             lines.append(f"  Phrase boundary: {lead.boundary_kind} (quality {lead.boundary_quality:.2f}) before «{lead.boundary_after}»")
             lines.append(f"  Why now: {lead.history_reason}")
-            pending = "" if all(r.executable for r in group) else "  [renderer support pending: not in the executable camera plan]"
-            lines.append(f"  Composition: {lead.composition_reason}{pending}")
+            lines.append(f"  Composition: {lead.composition_reason}")
             lines.append(f"  Return: {lead.reset_plan}")
+            if any(r.superseded_legacy for r in group):
+                lines.append(f"  Supersedes legacy: {'; '.join(dict.fromkeys(x for r in group for x in r.superseded_legacy))}")
         elif lead.source == "rhythm":
-            lines.append("  Holds on the base framing (no safe phrase boundary to move on, or the moment is left calm)")
+            lines.append("  Holds on the base framing (no safe boundary to move on, or the moment is left calm)")
+            if lead.superseded_legacy:
+                lines.append(f"  Supersedes legacy: {'; '.join(lead.superseded_legacy)}")
         sem = lead.semantic_enhancement + (f" (options: {', '.join(lead.semantic_options)})" if lead.semantic_options else "")
         conf = f"{lead.semantic_kind} {lead.semantic_confidence:.2f}" if lead.semantic_confidence is not None else "no reading"
-        lines.append(f"  Semantic: {sem} | confidence: {conf}")
+        lines.append(f"  Semantic: {sem} | confidence: {conf} | source: {lead.semantic_source}")
         lines.append(f"  Primary: {lead.primary_layer} | captions: {lead.caption_role} | speaker: {lead.speaker_visibility}")
         bs = lead.behind_subject + (f" ({lead.behind_subject_reason})" if lead.behind_subject_reason else "")
-        lines.append(f"  Behind-subject: {bs}")
+        cand = f" | candidate: {lead.behind_subject_candidate}" if lead.behind_subject_candidate else ""
+        lines.append(f"  Behind-subject: {bs}{cand}")
         lines.append(f"  Sound: intent {lead.sound_intent}, status {lead.sound_status} | Approval: {lead.approval_status}")
         out.append("\n".join(lines))
+    if tl is not None:
+        if tl.superseded:
+            out.append("Superseded legacy camera (never rendered):\n" + "\n".join(
+                f"  {e.move.value} {e.start:.2f}-{e.end:.2f}s -> {e.superseded_by}" for e in tl.superseded))
+        blockers = plan.render_blockers()
+        out.append("Camera timeline: " + ", ".join(f"{k}={v}" for k, v in tl.summary().items())
+                   + ("\nNot render-ready: " + "; ".join(blockers) if blockers else "\nEvery visual event is executable."))
     return "\n\n".join(out)
 
 

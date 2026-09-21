@@ -38,7 +38,7 @@ SLOW_PULL = "slow_pull"
 RETURN_TO_BASE = "return_to_base"
 
 _EPS = 1e-6
-_RELEASING = {CameraMove.RESET_TO_BASE, CameraMove.PUNCH_OUT}
+_RELEASING = {CameraMove.RESET_TO_BASE, CameraMove.PUNCH_OUT, CameraMove.SLOW_PULL}
 
 
 class CameraStory(BaseModel):

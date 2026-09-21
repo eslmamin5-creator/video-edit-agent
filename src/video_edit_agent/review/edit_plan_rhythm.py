@@ -7,8 +7,15 @@ return, the primary layer, the caption role, the speaker's visibility, the seman
 reading, behind-subject eligibility and the sound status.
 
 Behind-subject stays a semantic enhancement: it is only ever reported as eligible or
-not, with the reasons, and is never applied here. Nothing here renders, generates,
-approves or sets `ready_for_final_render`; rhythm rows are proposals and never block review.
+not, with the reasons, and is never applied here. A phrase the USER pinned keeps
+`semantic_source = user_pinned` and is not dropped for a low automatic confidence; it
+still has to pass every technical gate and is never approved here.
+
+The rhythm rows are then normalised into the ONE canonical camera timeline
+(`direction.camera_timeline`): legacy EDL zoom and `static` slot claims inside the
+rhythm's stretch are superseded explicitly, each slot shows the camera that will
+render, and the plan is render-ready only while every visual event is executable.
+Nothing here renders, generates, approves or sets `ready_for_final_render`.
 Nothing in this module is brand- or project-specific.
 """
 from __future__ import annotations
@@ -16,7 +23,14 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from video_edit_agent.core.schemas import EDL, Transcript
-from video_edit_agent.direction.camera import CameraPlan
+from video_edit_agent.direction.camera import CameraEvent, CameraPlan
+from video_edit_agent.direction.camera_timeline import (
+    build_camera_timeline,
+    legacy_events,
+    reconcile_slots,
+    static_claims,
+    timeline_from_camera_plan,
+)
 from video_edit_agent.direction.rhythm import (
     Occupied,
     RhythmPlan,
@@ -76,6 +90,12 @@ def _hint_at(hints: list[SemanticHint], t: float) -> SemanticHint | None:
     return next((h for h in hints if h.start - 1e-6 <= t < h.end), None)
 
 
+def user_pinned(slot: EditPlanSlot | None) -> bool:
+    """The user supplied the semantic evidence for this slot's treatment (they chose it, or pinned the phrase)."""
+    return slot is not None and (slot.semantic_source == "user_pinned" or (
+        slot.treatment == "behind_subject_text" and slot.status is SlotStatus.CHANGED))
+
+
 def _approval(slot: EditPlanSlot) -> str:
     return "approved (your decision)" if slot.status in (SlotStatus.APPROVED, SlotStatus.CHANGED, SlotStatus.GENERATION_APPROVED) \
         else "pending review" if slot.status is SlotStatus.PENDING_REVIEW else slot.status.value
@@ -104,12 +124,18 @@ def enrich(plan: EditPlan, rhythm: RhythmPlan, transcript: Transcript, edl: EDL,
             phrase = (slot.text if slot and slot.text else None) or next(iter(ep.keyword_options(row.transcript_context)), None)
         if row.source == "rhythm":
             row.semantic_options = semantic_enhancement_options(row.semantic_kind, row.semantic_confidence, phrase=phrase)
+        pinned = user_pinned(slot) and slot is not None and slot.treatment == "behind_subject_text"
         verdict = behind_subject_eligibility(
             phrase=phrase, semantic_kind=row.semantic_kind, semantic_confidence=row.semantic_confidence,
             evidence=evidence(row) if evidence else None, rhythm_state=row.state if row.source == "rhythm" else "base",
+            semantic_source="user_pinned" if pinned else "auto",
         )
         row.behind_subject = verdict.status
         row.behind_subject_reason = verdict.summary if verdict.status != "not_applicable" else ""
+        row.semantic_source = verdict.semantic_source
+        row.behind_subject_candidate = verdict.candidate
+        if pinned and slot is not None:  # the slot mirrors the row so the review shows the candidate state
+            slot.semantic_source, slot.behind_subject_candidate = "user_pinned", verdict.candidate
 
 
 def attach_rhythm(
@@ -134,7 +160,27 @@ def attach_rhythm(
                          occupied=owned_windows(plan, camera, start, end))
     enrich(plan, rhythm, transcript, edl, hints, evidence)
     plan.rhythm = rhythm.rows
+    attach_camera_timeline(plan, rhythm, edl, camera=camera, face_box=face_box, start=start, end=end)
     return rhythm
 
 
-__all__ = ["attach_rhythm", "enrich", "owned_windows"]
+def attach_camera_timeline(
+    plan: EditPlan, rhythm: RhythmPlan, edl: EDL, *, camera: CameraPlan | None = None,
+    face_box: tuple[float, float, float, float] | None = None, start: float = 0.0, end: float | None = None,
+) -> None:
+    """Normalises the rhythm rows (plus the director's/your camera events) into the canonical camera timeline, supersedes the
+    legacy EDL zoom and static slot claims inside its stretch, and makes every slot show the camera that will render."""
+    end = end if end is not None else rhythm.end
+    decided = (SlotStatus.APPROVED, SlotStatus.CHANGED, SlotStatus.GENERATION_APPROVED)
+    pinned: list[CameraEvent] = []
+    for e in timeline_from_camera_plan(camera, "director") if camera is not None else []:
+        slot = next((s for s in plan.slots if s.timeline_start - 0.05 <= e.start <= s.timeline_end + 0.05), None)
+        pinned.append(e.model_copy(update={"owner": "pinned" if slot is not None and slot.status in decided and not slot.settled_reason else "director"}))
+    legacy = [*legacy_events(edl), *static_claims(plan.slots)]
+    windows = [(s.timeline_start, s.timeline_end) for s in plan.slots if s.treatment == "behind_subject_text"]
+    plan.camera_timeline = build_camera_timeline(rhythm, face_box=face_box, legacy=legacy, pinned=pinned, behind_subject=windows,
+                                                 scope=(start, end))
+    reconcile_slots(plan.slots, plan.camera_timeline)
+
+
+__all__ = ["attach_camera_timeline", "attach_rhythm", "enrich", "owned_windows", "user_pinned"]

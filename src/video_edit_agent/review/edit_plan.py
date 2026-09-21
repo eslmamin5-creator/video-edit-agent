@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from video_edit_agent.broll.treatment import BROLL_TREATMENTS, Treatment, TreatmentDecision
 from video_edit_agent.core.schemas import EDL, Transcript
+from video_edit_agent.direction.camera_timeline import CameraTimeline, review_mismatches
 from video_edit_agent.direction.rhythm import RhythmRow
 
 PLAN_FILENAME = "edit_plan.json"
@@ -116,6 +117,10 @@ class EditPlanSlot(BaseModel):
     beat_kind: str | None = None
     direction_notes: list[str] = Field(default_factory=list)
     planning: BeatPlanning | None = None  # semantic beat / fatigue / reset / hierarchy metadata (Phase 1)
+    camera_owner: str = ""  # "rhythm": `camera` mirrors the executable camera timeline (Phase 1.3); "" = the slot's own / pinned camera
+    camera_events: list[str] = Field(default_factory=list)  # the exact executable events inside this slot
+    semantic_source: str = "auto"  # auto | user_pinned: who supplied the semantic evidence for this treatment
+    behind_subject_candidate: str = ""  # "" | user_pinned_pending_technical_gate | user_pinned_technical_gate_passed
     review_required: bool = False  # a decision you made conflicts with the new plan: it needs your answer
     review_note: str = ""
 
@@ -161,6 +166,18 @@ class EditPlan(BaseModel):
     sound_profile: str = "none"  # a profile choice only: none | minimal | dynamic
     last_slot: int | None = None  # the slot the user was last looking at ("ok" alone means this one)
     rhythm: list[RhythmRow] = Field(default_factory=list)  # Phase 1.2 visual rhythm map: planning metadata, never blocks review
+    camera_timeline: CameraTimeline | None = None  # Phase 1.3: the ONE camera the renderer draws (rhythm + pinned; legacy superseded)
+
+    def render_blockers(self) -> list[str]:
+        """Why the camera is not render-ready: a planning-only visual event, a double execution, or a review-visible camera
+        that differs from the executable event. Empty when there is no camera timeline to check."""
+        if self.camera_timeline is None:
+            return []
+        return [*self.camera_timeline.blockers, *review_mismatches(self.slots, self.camera_timeline)]
+
+    @property
+    def camera_render_ready(self) -> bool:
+        return not self.render_blockers()
 
     def slot(self, number: int) -> EditPlanSlot | None:
         return next((s for s in self.slots if s.number == number and number > 0), None)
@@ -199,6 +216,12 @@ def open_pending_slots(review_dir: Path) -> list[EditPlanSlot]:
     """Slots that still block final approval (empty when no edit plan exists)."""
     plan = load_plan(review_dir)
     return plan.pending() if plan else []
+
+
+def camera_blockers(review_dir: Path) -> list[str]:
+    """Why the saved plan's camera is not render-ready (empty when it is, or when no camera timeline was planned)."""
+    plan = load_plan(review_dir)
+    return plan.render_blockers() if plan else []
 
 
 # --------------------------------------------------------------------------

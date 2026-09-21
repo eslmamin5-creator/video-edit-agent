@@ -136,10 +136,10 @@ def test_7_the_refresh_window_is_soft_not_exact():
     plan = plan_rhythm(_long())
     gaps = [round(b - a, 1) for a, b in pairwise(sorted({*plan.changes}))]
     assert len(set(gaps)) > 2  # not a metronome
-    # with no safe boundary at all the hold simply extends past the guard instead of cutting mid-phrase
+    # with no phrase boundary at all nothing abrupt happens; only a smooth move may end the hold (Phase 1.3)
     long_run = plan_rhythm(_no_boundaries())
-    assert long_run.longest_unchanged_hold()[0] > RhythmPolicy().attention_guard_s
-    assert not long_run.excursions()
+    assert not {"punch_in"} & set(long_run.excursions())
+    assert all(r.motion_class == "smooth" for r in long_run.rows if r.moving)
 
 
 def test_8_time_alone_cannot_create_semantic_graphics():
@@ -208,11 +208,12 @@ def _lower_row(face):
 
 
 def test_15_lower_subject_creates_safe_top_space():
-    plan, row = _lower_row((0.30, 0.05, 0.40, 0.30))  # a measured face near the top
+    plan, row = _lower_row((0.30, 0.30, 0.40, 0.15))  # a measured face with room to lower
     assert row is not None and row.anchor_y == 0.0 and row.zoom_to == RhythmPolicy().lower_zoom
     assert re.search(r"top space|headroom", row.composition_reason, re.IGNORECASE)
-    assert not row.executable  # honest: the renderer has no vertical anchor yet
-    assert all(e.anchor_x is not None for e in plan.to_camera_plan().events)
+    assert row.executable  # a measured face makes it executable (Phase 1.3)
+    assert plan.to_camera_plan(face_box=(0.30, 0.30, 0.40, 0.15)).events
+    assert all(e.anchor_x is not None for e in plan.to_camera_plan(face_box=(0.30, 0.30, 0.40, 0.15)).events)
     # a face that would end up under the caption band is never lowered
     assert "lower_subject" not in plan_rhythm(_long(40), face_box=(0.30, 0.55, 0.40, 0.40)).excursions()
 

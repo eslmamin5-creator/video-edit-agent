@@ -6,6 +6,7 @@ choices that are unproven or too dense (`suitability`, spacing rules). Sound liv
 in the sibling `video_edit_agent.sound` package.
 """
 from video_edit_agent.direction.camera import CameraMove, CameraPlan, CameraPolicy, plan_camera
+from video_edit_agent.direction.camera_timeline import CameraTimeline, build_camera_timeline
 from video_edit_agent.direction.director import (
     Beat,
     BeatKind,
@@ -49,6 +50,7 @@ __all__ = [
     "CameraPlan",
     "CameraPolicy",
     "CameraStory",
+    "CameraTimeline",
     "DirectionResult",
     "FatigueReading",
     "RhythmPlan",
@@ -65,6 +67,7 @@ __all__ = [
     "VisualHierarchy",
     "assess_behind_subject",
     "behind_subject_eligibility",
+    "build_camera_timeline",
     "build_hierarchy",
     "camera_story",
     "detect_semantic_beats",

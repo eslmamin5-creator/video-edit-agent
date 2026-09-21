@@ -12,6 +12,9 @@ choice; there is no continuous fake camera motion.
     slow_push       a slow drift to a small level over the beat, then reset
     reframe_left/right  a slight zoom with the anchor shifted (needs room), then reset
     reset_to_base   ease back to the base framing
+    slow_pull       the gradual glide back to base after a slow_push
+    lower_subject   top-anchored zoom: the subject sits lower in the frame (real headroom, head never cropped)
+    raise_subject   planning-only: the renderer cannot pad above the source frame
 
 Spacing and density rules drop moves that are too close or too many; every
 drop is recorded with its reason. The plan is realised through the EXISTING
@@ -26,7 +29,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
-from video_edit_agent.core.schemas import EDL, Reframe, ZoomRamp
+from video_edit_agent.core.schemas import DEFAULT_ZOOM_ANCHOR_Y, EDL, Reframe, ZoomRamp
 from video_edit_agent.render import reframe as reframe_math
 
 BASE_ZOOM = 1.0
@@ -41,6 +44,24 @@ class CameraMove(str, Enum):
     REFRAME_LEFT = "reframe_left"
     REFRAME_RIGHT = "reframe_right"
     RESET_TO_BASE = "reset_to_base"
+    SLOW_PULL = "slow_pull"
+    LOWER_SUBJECT = "lower_subject"
+    RAISE_SUBJECT = "raise_subject"
+
+
+class EventStatus(str, Enum):
+    """Whether the renderer will actually draw an event. Only `executable` events can be rendered."""
+
+    PLANNING_ONLY = "planning_only"  # proposed, but the renderer cannot (or is not yet proven to) realise it
+    EXECUTABLE = "executable"
+    BLOCKED = "blocked"  # would render, but a safety rule forbids it
+    SUPERSEDED = "superseded"  # an older event that a newer owner replaced; it never renders
+
+
+class MotionClass(str, Enum):
+    ABRUPT = "abrupt"  # perceptually discrete: wants a phrase boundary
+    SMOOTH = "smooth"  # gradual: may begin at any word boundary
+    NONE = "none"
 
 
 class CameraPolicy(BaseModel):
@@ -78,6 +99,9 @@ class CameraRequest(BaseModel):
 
 
 class CameraEvent(BaseModel):
+    """One camera move. `start`/`end` are the motion itself (start = motion start, end = settle); `zoom_from` /
+    `anchor_*_from` are the state it starts from and `zoom_to` / `anchor_*` the ABSOLUTE state it settles on."""
+
     start: float  # the ramp begins here (timeline seconds)
     end: float  # ... and reaches `zoom_to` here
     move: CameraMove
@@ -85,6 +109,34 @@ class CameraEvent(BaseModel):
     anchor_x: float = BASE_ANCHOR_X
     beat_start: float | None = None
     beat_end: float | None = None
+    zoom_from: float | None = None
+    anchor_x_from: float | None = None
+    anchor_y: float = DEFAULT_ZOOM_ANCHOR_Y
+    anchor_y_from: float | None = None
+    easing: str = "smoothstep"
+    status: EventStatus = EventStatus.EXECUTABLE
+    status_reason: str = ""
+    owner: str = "rhythm"  # rhythm | pinned | director | legacy
+    motion_class: MotionClass = MotionClass.ABRUPT
+    boundary_kind: str = ""
+    boundary_quality: float | None = None
+    number: int = 0  # the rhythm entry this event belongs to
+    safe_headroom: float | None = None  # normalised face-top space after the move (None: no measured face)
+    headroom_gain: float | None = None
+    face_bottom: float | None = None
+    superseded_by: str = ""
+
+    @property
+    def scale(self) -> float:
+        return self.zoom_to
+
+    @property
+    def motion_start(self) -> float:
+        return self.start
+
+    @property
+    def motion_end(self) -> float:
+        return self.end
 
 
 class DroppedMove(BaseModel):
@@ -210,6 +262,20 @@ def apply_to_edl(edl: EDL, plan: CameraPlan, *, face_box: tuple[float, float, fl
 
 
 __all__ = [
-    "BASE_ZOOM", "POLICIES", "CameraEvent", "CameraMove", "CameraPlan", "CameraPolicy", "CameraRequest",
-    "DroppedMove", "apply_to_edl", "peak_zoom", "plan_camera", "policy_for", "zoom_trajectory",
+    "BASE_ANCHOR_X",
+    "BASE_ZOOM",
+    "POLICIES",
+    "CameraEvent",
+    "CameraMove",
+    "CameraPlan",
+    "CameraPolicy",
+    "CameraRequest",
+    "DroppedMove",
+    "EventStatus",
+    "MotionClass",
+    "apply_to_edl",
+    "peak_zoom",
+    "plan_camera",
+    "policy_for",
+    "zoom_trajectory",
 ]

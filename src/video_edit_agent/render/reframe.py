@@ -68,11 +68,12 @@ def zoom_at(reframe: Reframe, t: float) -> float:
     return zoom
 
 
-def safe_anchor(reframe: Reframe) -> tuple[float, float]:
-    """The anchor actually used: the requested one, nudged only as far as needed
-    to keep `face_box` (with its margin) inside the crop window at the tightest
-    zoom of the move. A face larger than the window is centred instead."""
-    ax, ay = reframe.anchor_x, reframe.anchor_y
+def _clamp_anchor(reframe: Reframe, ax: float, ay: float) -> tuple[float, float]:
+    """Nudge an anchor only as far as needed to keep `face_box` (with its margin) inside the crop window at
+    the tightest zoom of the move. A face larger than the window is centred instead.
+
+    The admissible anchors at a given zoom are nested (a looser zoom admits a superset), so clamping every
+    keyframe at the reframe's MAX zoom keeps the face inside the window at every t of an eased anchor move."""
     if reframe.face_box is None:
         return ax, ay
     fx, fy, fw, fh = reframe.face_box
@@ -81,6 +82,39 @@ def safe_anchor(reframe: Reframe) -> tuple[float, float]:
         _clamp_axis(ax, fx, fw, frac, reframe.face_margin),
         _clamp_axis(ay, fy, fh, frac, reframe.face_margin),
     )
+
+
+def safe_anchor(reframe: Reframe) -> tuple[float, float]:
+    """The anchor a reframe STARTS from (the whole move's anchor when nothing is animated)."""
+    return _clamp_anchor(reframe, reframe.anchor_x, reframe.anchor_y)
+
+
+def has_anchor_motion(reframe: Reframe) -> bool:
+    return any(r.anchor_x_to is not None or r.anchor_y_to is not None for r in reframe.ramps)
+
+
+def _anchor_keyframes(reframe: Reframe) -> list[tuple[ZoomRamp, tuple[float, float], tuple[float, float]]]:
+    """(ramp, anchor before, anchor after) for each ramp; an unset target keeps the previous anchor."""
+    cur = safe_anchor(reframe)
+    frames = []
+    for ramp in reframe.ramps:
+        ax = cur[0] if ramp.anchor_x_to is None else ramp.anchor_x_to
+        ay = cur[1] if ramp.anchor_y_to is None else ramp.anchor_y_to
+        nxt = _clamp_anchor(reframe, ax, ay)
+        frames.append((ramp, cur, nxt))
+        cur = nxt
+    return frames
+
+
+def anchor_at(reframe: Reframe, t: float) -> tuple[float, float]:
+    """Anchor at clip-local time `t` (the Python twin of `anchor_expr`)."""
+    ax, ay = safe_anchor(reframe)
+    for ramp, before, after in _anchor_keyframes(reframe):
+        span = max(ramp.end_s - ramp.start_s, 1e-3)
+        e = _ease((t - ramp.start_s) / span, ramp.easing)
+        ax += (after[0] - before[0]) * e
+        ay += (after[1] - before[1]) * e
+    return ax, ay
 
 
 def _clamp_axis(anchor: float, start: float, size: float, frac: float, margin: float) -> float:
@@ -99,7 +133,7 @@ def _clamp_axis(anchor: float, start: float, size: float, frac: float, margin: f
 def crop_window(reframe: Reframe, t: float, width: int, height: int) -> tuple[float, float, float, float]:
     """(x, y, w, h) in source pixels of the region shown at clip-local time `t`."""
     z = zoom_at(reframe, t)
-    ax, ay = safe_anchor(reframe)
+    ax, ay = anchor_at(reframe, t)
     w, h = width / z, height / z
     return (width - w) * ax, (height - h) * ay, w, h
 
@@ -119,6 +153,16 @@ def zoom_expr(reframe: Reframe) -> str:
     for ramp in reframe.ramps:
         terms.append(f"({ramp.zoom_to - level:.4f})*{_ease_expr(ramp)}")
         level = ramp.zoom_to
+    return "(" + "+".join(terms) + ")"
+
+
+def anchor_expr(reframe: Reframe, axis: int) -> str:
+    """ffmpeg expression for the anchor along one axis (0 = x, 1 = y), eased with the zoom ramps."""
+    terms = [f"{safe_anchor(reframe)[axis]:.4f}"]
+    for ramp, before, after in _anchor_keyframes(reframe):
+        delta = after[axis] - before[axis]
+        if abs(delta) > _EPS:
+            terms.append(f"({delta:.4f})*{_ease_expr(ramp)}")
     return "(" + "+".join(terms) + ")"
 
 
@@ -145,6 +189,10 @@ def reframe_filters(
             f"scale={width}:{height}:flags=lanczos,setsar=1[{out_label}]"
         )]
     z = zoom_expr(reframe)
+    if has_anchor_motion(reframe):
+        ax_e, ay_e = anchor_expr(reframe, 0), anchor_expr(reframe, 1)
+    else:
+        ax_e, ay_e = f"{ax:.4f}", f"{ay:.4f}"
     return [
         (
             f"[{src_label}]scale=w='trunc({width}*{z}/2)*2':h='trunc({height}*{z}/2)*2'"
@@ -152,7 +200,15 @@ def reframe_filters(
         ),
         f"color=c=black:s={width}x{height}:r={fps:g}:d={duration + 1.0:.3f}[rfbg{tag}]",
         (
-            f"[rfbg{tag}][rfz{tag}]overlay=x='-(w-{width})*{ax:.4f}':y='-(h-{height})*{ay:.4f}'"
+            f"[rfbg{tag}][rfz{tag}]overlay=x='-(w-{width})*{ax_e}':y='-(h-{height})*{ay_e}'"
             f":eval=frame:shortest=1,format=yuv420p,setsar=1[{out_label}]"
         ),
     ]
+
+
+def face_frame(face_box: tuple[float, float, float, float], zoom: float, anchor_x: float, anchor_y: float) -> tuple[float, float, float, float]:
+    """(left, top, right, bottom) of `face_box` in the OUTPUT frame, normalised, after a crop at `zoom` around the
+    anchor. `top` is the space left above the face: the number a lower_subject move is meant to increase."""
+    fx, fy, fw, fh = face_box
+    ox, oy = (1.0 - 1.0 / zoom) * anchor_x, (1.0 - 1.0 / zoom) * anchor_y
+    return (fx - ox) * zoom, (fy - oy) * zoom, (fx + fw - ox) * zoom, (fy + fh - oy) * zoom

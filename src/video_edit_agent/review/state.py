@@ -120,13 +120,17 @@ def approve(review_dir: Path, note: str | None = None) -> ReviewApprovalState:
         names = ", ".join(f"{t.treatment} ({t.blocking_reason or 'copy not approved'})" for t in open_copy)
         raise UnresolvedReviewItems(f"required on-screen copy is not approved: {names}")
     from video_edit_agent.review.edit_plan import (
-        open_pending_slots,  # local: avoids a review<->broll import cycle
+        camera_blockers,  # local: avoids a review<->broll import cycle
+        open_pending_slots,
     )
 
     open_slots = open_pending_slots(review_dir)
     if open_slots:
         names = ", ".join(str(s.number) for s in open_slots)
         raise UnresolvedReviewItems(f"edit-plan decisions are still pending: {names}")
+    blockers = camera_blockers(review_dir)
+    if blockers:
+        raise UnresolvedReviewItems("the camera plan is not render-ready: " + "; ".join(blockers[:4]))
     state.stage = ReviewStage.APPROVED
     state.ready_for_final_render = True
     state.broll_generation_approved = True

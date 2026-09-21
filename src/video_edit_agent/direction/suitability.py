@@ -86,6 +86,8 @@ class Eligibility(BaseModel):
     unproven: list[str] = []
     requires_approval: bool = True
     summary: str = ""
+    semantic_source: str = "auto"  # auto (the detector's confidence) | user_pinned (the user named this phrase)
+    candidate: str = ""  # "" | user_pinned_pending_technical_gate | user_pinned_technical_gate_passed
 
 
 def behind_subject_eligibility(
@@ -98,10 +100,16 @@ def behind_subject_eligibility(
     caption_competing: bool = False,
     better_simpler_treatment: bool = False,
     review_first: bool = True,
+    semantic_source: str = "auto",
 ) -> Eligibility:
     """Whether behind-subject text may be OFFERED for this phrase. Every one of the ten conditions must hold;
     anything unmeasured counts as unproven and fails. Behind-subject is a semantic enhancement: it is never part
-    of the basic rhythm loop and it is never forced onto a suitable phrase."""
+    of the basic rhythm loop and it is never forced onto a suitable phrase.
+
+    Two sources of SEMANTIC evidence exist: the detector's confidence (`auto`) and the user's own choice of this phrase
+    (`user_pinned`). A pin replaces only the semantic-confidence check: low model confidence never discards a phrase
+    the user chose. Every TECHNICAL gate still applies unchanged (timing, phrase length, mask, head/hair, meaningful
+    occlusion, caption hierarchy, composition, conflicts), and a pin is never an approval."""
     if not phrase or not phrase.strip():
         return Eligibility(status="not_applicable", requires_approval=review_first, summary="no candidate phrase in this stretch")
     ev = evidence or BehindSubjectEvidence()
@@ -114,7 +122,10 @@ def behind_subject_eligibility(
         elif value is False:
             failed.append(name)
 
-    if semantic_kind is None or semantic_confidence is None:
+    pinned = semantic_source == "user_pinned"
+    if pinned:
+        pass  # the user's own choice is the semantic evidence; the technical gates below still decide
+    elif semantic_kind is None or semantic_confidence is None:
         unproven.append("semantic_clarity")
     elif semantic_confidence < MIN_SEMANTIC_CONFIDENCE:
         failed.append("semantic_clarity")
@@ -144,9 +155,11 @@ def behind_subject_eligibility(
         parts.append("failed: " + ", ".join(failed))
     if unproven:
         parts.append("not proven: " + ", ".join(unproven))
+    candidate = "" if not pinned else "user_pinned_technical_gate_passed" if ok else "user_pinned_pending_technical_gate"
     return Eligibility(
         status="eligible" if ok else "not_eligible", failed=failed, unproven=unproven, requires_approval=review_first,
         summary="passes every check" + ("; still needs your approval" if review_first else "") if ok else "; ".join(parts),
+        semantic_source="user_pinned" if pinned else "auto", candidate=candidate,
     )
 
 

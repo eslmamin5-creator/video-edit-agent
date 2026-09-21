@@ -22,6 +22,13 @@ reframe_right, lower_subject, raise_subject (only with a measured composition),
 reset_to_base, hold. Every framing value is ABSOLUTE (no accumulation). Every
 excursion is planned with its return: base -> move -> hold -> reset.
 
+Two boundary classes. ABRUPT moves (a snap punch_in, a cut-style return) are perceptually discrete: they want a
+phrase / clause / sentence boundary or a strong pause. SMOOTH moves (slow_push, slow_pull, a gradual reframe,
+lower_subject and their glide returns) may begin at any word boundary, still never inside a word. A hold that keeps
+extending with no phrase boundary in reach may therefore end with a smooth Tier-1 move; that is a soft rule about
+boundaries and evidence, not a timer. A smooth return is itself a gradual motion (about 0.7-1.2 s) that starts before
+the return point and settles on the boundary; nothing snaps.
+
 Anti-pattern memory: the last three excursions are remembered. The same state
 twice in a row is never chosen, a repeated family / ABAB / identical cadence is
 penalised.
@@ -35,6 +42,7 @@ from itertools import pairwise
 
 from pydantic import BaseModel, Field
 
+from video_edit_agent.core.schemas import DEFAULT_ZOOM_ANCHOR_Y as DEFAULT_ANCHOR_Y
 from video_edit_agent.core.schemas import Transcript, Word
 from video_edit_agent.direction.camera import (
     BASE_ANCHOR_X,
@@ -43,10 +51,13 @@ from video_edit_agent.direction.camera import (
     CameraMove,
     CameraPlan,
     CameraPolicy,
+    EventStatus,
+    MotionClass,
 )
 from video_edit_agent.direction.director import LOW_CONFIDENCE
 from video_edit_agent.direction.semantic_beats import _INTERROGATIVES, _PHRASE_CUES, _fold
 from video_edit_agent.direction.suitability import MAX_PHRASE_WORDS
+from video_edit_agent.render.reframe import face_frame
 
 
 class RhythmState(str, Enum):
@@ -68,6 +79,9 @@ VOCABULARY = tuple(s.value for s in RhythmState)
 
 # the states an excursion can START with, in the fixed order used for tie-breaks
 EXCURSIONS = (S.SLOW_PUSH, S.REFRAME_LEFT, S.REFRAME_RIGHT, S.PUNCH_IN, S.LOWER_SUBJECT, S.RAISE_SUBJECT)
+ABRUPT_STATES = frozenset({S.PUNCH_IN, S.PUNCH_OUT})
+SMOOTH_STATES = frozenset({S.SLOW_PUSH, S.SLOW_PULL, S.REFRAME_LEFT, S.REFRAME_RIGHT, S.LOWER_SUBJECT, S.RAISE_SUBJECT, S.RESET_TO_BASE})
+EXTENSION_STATES = (S.SLOW_PUSH, S.REFRAME_LEFT, S.REFRAME_RIGHT)  # the smooth Tier-1 moves an extended hold may use
 _MOTION = {S.PUNCH_IN, S.PUNCH_OUT, S.SLOW_PUSH, S.SLOW_PULL, S.REFRAME_LEFT, S.REFRAME_RIGHT, S.LOWER_SUBJECT,
            S.RAISE_SUBJECT, S.RESET_TO_BASE}
 _STATIC = {S.BASE, S.HOLD}
@@ -91,6 +105,14 @@ WEIGHTS = {"boundary": 0.28, "timing": 0.22, "novelty": 0.18, "composition": 0.1
            "energy": 0.04, "caption": 0.04}
 
 
+def motion_class(state: str | S) -> MotionClass:
+    """abrupt (perceptually discrete) or smooth (gradual) for a rhythm state; holds and base are neither."""
+    st = S(state)
+    if st in ABRUPT_STATES:
+        return MotionClass.ABRUPT
+    return MotionClass.SMOOTH if st in SMOOTH_STATES else MotionClass.NONE
+
+
 class RhythmPolicy(BaseModel):
     """Soft targets (never exposed as rigid timers) and the absolute framing levels."""
 
@@ -112,11 +134,20 @@ class RhythmPolicy(BaseModel):
     slow_push_zoom: float = 1.05
     reframe_zoom: float = 1.05
     reframe_shift: float = 0.05
-    lower_zoom: float = 1.10
+    lower_zoom: float = 1.12
     raise_zoom: float = 1.06
     max_zoom: float = 1.14
     caption_safe_top: float = 0.70  # the caption band starts below this fraction of the frame height
     min_top_margin: float = 0.03  # headroom a raise_subject must leave
+    min_headroom_gain: float = 0.03  # a lower_subject must add at least this much face-top space (fraction of frame height)
+    plan_raise_subject: bool = False  # raise_subject is planning-only (the renderer cannot pad above the source frame)
+    # smooth (gradual) motion
+    smooth_entry_s: float = 0.9  # a smooth move glides in over this long
+    return_min_s: float = 0.7  # a smooth return runs between these lengths and settles on its boundary
+    return_max_s: float = 1.2
+    return_glide_s: float = 0.9  # the preferred length inside that range
+    smooth_min_quality: float = 0.3  # a smooth move may start on any word boundary (never inside a word)
+    extend_after_s: float | None = None  # an extended hold may end with a smooth move this long after the last change (default refresh_max_s)
 
     def level(self, state: S) -> float:
         z = {S.PUNCH_IN: self.punch_in_zoom, S.SLOW_PUSH: self.slow_push_zoom, S.REFRAME_LEFT: self.reframe_zoom,
@@ -264,7 +295,21 @@ class RhythmRow(BaseModel):
     zoom_to: float = BASE_ZOOM
     anchor_x: float = BASE_ANCHOR_X
     anchor_y: float | None = None  # None = the renderer default; 0/1 only for lower/raise
-    executable: bool = True  # False: the renderer cannot realise it yet (vertical framing)
+    executable: bool = True  # mirrors `status == executable` once the camera timeline has classified it
+    # the motion itself, so the timeline can store start / settle and both states
+    motion_start: float | None = None
+    motion_end: float | None = None
+    motion_class: str = "none"  # abrupt | smooth | none
+    anchor_x_from: float | None = None
+    anchor_y_from: float | None = None
+    status: str = "executable"  # planning_only | executable | blocked | superseded (see direction.camera.EventStatus)
+    status_reason: str = ""
+    safe_headroom: float | None = None
+    headroom_gain: float | None = None
+    face_bottom: float | None = None
+    superseded_legacy: list[str] = Field(default_factory=list)
+    semantic_source: str = "auto"  # auto | user_pinned
+    behind_subject_candidate: str = ""
     boundary_kind: str = ""
     boundary_quality: float | None = None
     boundary_after: str = ""
@@ -328,28 +373,41 @@ class RhythmPlan(BaseModel):
         best = max(((b - a, a, b) for a, b in pairwise(edges)), default=(0.0, self.start, self.end))
         return round(best[0], 3), round(best[1], 3), round(best[2], 3)
 
-    def to_camera_plan(self, base: CameraPolicy | None = None) -> CameraPlan:
-        """The executable part of this plan through the existing camera model. Vertical states are left out
-        (the renderer has no vertical anchor yet) and stay in `rows` marked `executable=False`."""
+    def to_camera_plan(self, base: CameraPolicy | None = None, *, face_box: FaceBox | None = None) -> CameraPlan:
+        """The executable part of this plan through the camera model. raise_subject (and a lower_subject with no measured
+        face) stay in `rows` as planning-only; every other move becomes an event with both states and its motion span."""
         policy = base or CameraPolicy()
         plan = CameraPlan(policy=policy)
-        skip_reset = False
         for r in self.rows:
             if r.source != "rhythm" or not r.moving:
                 continue
-            if r.state in (S.LOWER_SUBJECT.value, S.RAISE_SUBJECT.value):
-                skip_reset = True
+            if r.state == S.RAISE_SUBJECT.value or (r.state == S.LOWER_SUBJECT.value and face_box is None):
                 continue
-            if r.state in (S.RESET_TO_BASE.value, S.SLOW_PULL.value, S.PUNCH_OUT.value):
-                if skip_reset:
-                    skip_reset = False
-                    continue
-                move = CameraMove.RESET_TO_BASE
-            else:
-                move = CameraMove(r.state)
-            plan.events.append(CameraEvent(start=r.start, end=r.end if r.state == S.SLOW_PUSH.value else round(r.start + policy.ease_s, 3),
-                                           move=move, zoom_to=r.zoom_to, anchor_x=r.anchor_x))
+            plan.events.append(row_event(r, face_box))
         return plan
+
+
+_BACK = {S.PUNCH_OUT.value, S.SLOW_PULL.value, S.RESET_TO_BASE.value}
+
+
+def row_event(r: RhythmRow, face_box: FaceBox | None = None) -> CameraEvent:
+    """One moving rhythm row as a camera event (start = motion start, end = settle)."""
+    move = CameraMove.RESET_TO_BASE if r.state == S.PUNCH_OUT.value else CameraMove(r.state)
+    back = r.state in _BACK
+    ay = DEFAULT_ANCHOR_Y if r.anchor_y is None else r.anchor_y
+    ev = CameraEvent(
+        start=r.motion_start if r.motion_start is not None else r.start, end=r.motion_end if r.motion_end is not None else r.end,
+        move=move, zoom_to=r.zoom_to, zoom_from=r.zoom_from, anchor_x=BASE_ANCHOR_X if back else r.anchor_x,  # a return targets the canonical base exactly
+        anchor_x_from=r.anchor_x_from if r.anchor_x_from is not None else r.anchor_x,
+        anchor_y=DEFAULT_ANCHOR_Y if back else ay, anchor_y_from=r.anchor_y_from if r.anchor_y_from is not None else ay,
+        motion_class=MotionClass(r.motion_class if r.motion_class in ("abrupt", "smooth") else "smooth" if back else "abrupt"),
+        boundary_kind=r.boundary_kind, boundary_quality=r.boundary_quality, number=r.number,
+        status=EventStatus.EXECUTABLE if r.executable else EventStatus.PLANNING_ONLY, status_reason=r.status_reason,
+    )
+    if face_box is not None and not back:
+        top, bottom = face_frame(face_box, ev.zoom_to, ev.anchor_x, ev.anchor_y)[1::2]
+        ev.safe_headroom, ev.headroom_gain, ev.face_bottom = round(top, 4), round(top - face_box[1], 4), round(bottom, 4)
+    return ev
 
 
 # --------------------------------------------------------------------------
@@ -369,7 +427,7 @@ def timing_score(hold: float, policy: RhythmPolicy) -> float:
         return 1.0
     if hold <= guard:
         return 1.0 - 0.4 * (hold - hi) / max(guard - hi, 1e-6)
-    return max(0.2, 0.6 - 0.1 * (hold - guard))
+    return max(0.1, 0.6 - 0.15 * (hold - guard))  # keeps falling (a soft pull, not a timer) so a nearer phrase boundary beats a long wait
 
 
 class _Memory:
@@ -430,7 +488,9 @@ def _face_checks(state: S, policy: RhythmPolicy, face: FaceBox | None) -> tuple[
         top, bottom = y * z, (y + h) * z
         if bottom > policy.caption_safe_top:
             return False, 0.0, f"the lowered face would reach {bottom:.2f} of the frame, inside the caption band (>{policy.caption_safe_top:.2f})"
-        return True, 1.0, f"top space {y:.3f} -> {top:.3f} of the frame; face bottom {bottom:.2f} stays above the caption band"
+        if top - y < policy.min_headroom_gain:
+            return False, 0.0, f"top space would grow only {top - y:.3f} of the frame (< {policy.min_headroom_gain:.2f}): not a usable lower_subject"
+        return True, 1.0, f"top space {y:.3f} -> {top:.3f} of the frame (+{top - y:.3f}); face bottom {bottom:.2f} stays above the caption band"
     if face is None:  # raise_subject
         return False, 0.0, "composition not measured: raising the subject needs a measured face box"
     y, h = face[1], face[3]
@@ -473,23 +533,56 @@ def _free_windows(start: float, end: float, occupied: list[Occupied], margin: fl
     return wins
 
 
-def _release(t: float, bounds: list[Boundary], policy: RhythmPolicy, limit: float) -> Boundary | None:
-    """The boundary where the excursion started at `t` gives the framing back: a phrase boundary between the minimum
-    and maximum excursion length, nearest the middle of that range; a word gap only when no phrase boundary fits."""
+def _return_start(settle: float, bounds: list[Boundary], policy: RhythmPolicy, floor: float) -> float | None:
+    """Where a smooth return starts so that it glides for return_min..return_max seconds and settles at `settle`. It
+    starts on a word boundary (never inside a word), not before `floor`; None when speech offers no such boundary."""
+    pool = [b for b in bounds if b.t >= floor - 1e-9 and policy.return_min_s - 1e-9 <= settle - b.t <= policy.return_max_s + 1e-9]
+    if not pool:
+        return None
+    return min(pool, key=lambda b: (round(abs(settle - b.t - policy.return_glide_s), 1), -b.quality, -b.t)).t
+
+
+def _release(t: float, bounds: list[Boundary], policy: RhythmPolicy, limit: float, *, smooth: bool = False) -> tuple[Boundary, float] | None:
+    """(settle boundary, return start) for the excursion started at `t`.
+
+    A smooth excursion settles between the minimum and maximum excursion length on the boundary nearest the middle of
+    that range (a phrase boundary when one fits, else any word boundary) and its return glides in beforehand. An abrupt
+    one snaps back ON a phrase boundary and there is no fallback to a word gap."""
     lo, hi = t + policy.excursion_min_s, min(t + policy.excursion_max_s, limit)
     if hi < lo:
         return None
     mid = (policy.excursion_min_s + policy.excursion_max_s) / 2
     pool = [b for b in bounds if lo <= b.t <= hi]
-    safe = [b for b in pool if b.safe] or pool
-    if not safe:
-        return None
-    return max(safe, key=lambda b: (0.6 * b.quality + 0.4 * (1 - abs((b.t - t) - mid) / mid), -b.t))
+    ranked = sorted((b for b in pool if b.safe or smooth),
+                    key=lambda b: (b.safe, 0.6 * b.quality + 0.4 * (1 - abs((b.t - t) - mid) / mid), -b.t), reverse=True)
+    for b in ranked:
+        if not smooth:
+            return b, b.t
+        start = _return_start(b.t, bounds, policy, t + policy.smooth_entry_s + 0.2)
+        if start is not None:
+            return b, start
+    return None
 
 
-def _rows_for(state: S, t: float, rel: Boundary, policy: RhythmPolicy, face: FaceBox | None) -> list[RhythmRow]:
+def _inside_emphasis(t: float, hints: list[SemanticHint]) -> bool:
+    """True when `t` falls inside a stretch the semantic detector is confident about (a smooth move must not interrupt it)."""
+    return any(h.confidence >= LOW_CONFIDENCE and h.start < t < h.end for h in hints)
+
+
+def _extension_pool(bounds: list[Boundary], lo: float, latest: float, cursor: float, policy: RhythmPolicy,
+                    hints: list[SemanticHint]) -> list[Boundary]:
+    """Word boundaries where an extended hold may end with a smooth move: no phrase boundary is in reach, the hold has
+    run past the refresh window, and no confident emphasis is in progress. Called only when the hold is extending."""
+    after = policy.extend_after_s if policy.extend_after_s is not None else policy.refresh_max_s
+    hi = min(cursor + policy.attention_guard_s, latest)
+    return [b for b in bounds if not b.safe and b.quality >= policy.smooth_min_quality and max(lo, cursor + after) <= b.t <= hi
+            and not _inside_emphasis(b.t, hints)]
+
+
+def _rows_for(state: S, t: float, rel: Boundary, ret_start: float, policy: RhythmPolicy, face: FaceBox | None) -> list[RhythmRow]:
     z = policy.level(state)
-    e, r_end = policy.ease_s, rel.t + (policy.slow_ease_s if state is S.SLOW_PUSH else policy.ease_s)
+    smooth = state in SMOOTH_STATES
+    cls = (MotionClass.SMOOTH if smooth else MotionClass.ABRUPT).value
     ax, ay = BASE_ANCHOR_X, None
     if state is S.REFRAME_LEFT:
         ax = round(BASE_ANCHOR_X - policy.reframe_shift, 3)
@@ -499,19 +592,24 @@ def _rows_for(state: S, t: float, rel: Boundary, policy: RhythmPolicy, face: Fac
         ay = 0.0
     elif state is S.RAISE_SUBJECT:
         ay = 1.0
-    vertical = state in (S.LOWER_SUBJECT, S.RAISE_SUBJECT)
     back = S.SLOW_PULL if state is S.SLOW_PUSH else S.RESET_TO_BASE
+    settle = rel.t if smooth else round(rel.t + policy.ease_s, 3)
     rows = []
-    if state is S.SLOW_PUSH:  # base -> slow_push -> slow_pull -> base: the push drifts across the whole excursion
-        rows.append(RhythmRow(start=t, end=rel.t, state=state.value, zoom_from=BASE_ZOOM, zoom_to=z, anchor_x=ax))
-    else:  # base -> move -> hold -> reset
-        rows.append(RhythmRow(start=t, end=round(t + e, 3), state=state.value, zoom_from=BASE_ZOOM, zoom_to=z, anchor_x=ax, anchor_y=ay))
-        rows.append(RhythmRow(start=round(t + e, 3), end=rel.t, state=S.HOLD.value, zoom_from=z, zoom_to=z, anchor_x=ax, anchor_y=ay))
-    rows.append(RhythmRow(start=rel.t, end=round(r_end, 3), state=back.value, zoom_from=z, zoom_to=BASE_ZOOM, anchor_x=BASE_ANCHOR_X,
-                          anchor_y=ay))
-    if vertical:
+    if state is S.SLOW_PUSH:  # base -> slow_push -> slow_pull -> base: the push drifts until the pull begins
+        rows.append(RhythmRow(start=t, end=ret_start, state=state.value, zoom_from=BASE_ZOOM, zoom_to=z, anchor_x=ax, motion_start=t,
+                              motion_end=ret_start, motion_class=cls, anchor_x_from=BASE_ANCHOR_X))
+    else:  # base -> move -> hold -> return
+        e = round(t + (policy.smooth_entry_s if smooth else policy.ease_s), 3)
+        rows.append(RhythmRow(start=t, end=e, state=state.value, zoom_from=BASE_ZOOM, zoom_to=z, anchor_x=ax, anchor_y=ay, motion_start=t,
+                              motion_end=e, motion_class=cls, anchor_x_from=BASE_ANCHOR_X))
+        rows.append(RhythmRow(start=e, end=ret_start, state=S.HOLD.value, zoom_from=z, zoom_to=z, anchor_x=ax, anchor_y=ay))
+    rows.append(RhythmRow(start=ret_start, end=settle, state=back.value, zoom_from=z, zoom_to=BASE_ZOOM, anchor_x=BASE_ANCHOR_X, anchor_y=ay,
+                          motion_start=ret_start, motion_end=settle, motion_class=cls, anchor_x_from=ax, anchor_y_from=ay))
+    if state is S.RAISE_SUBJECT or (state is S.LOWER_SUBJECT and face is None):
+        why = ("raise_subject is planning-only: the renderer cannot pad above the source frame" if state is S.RAISE_SUBJECT
+               else "lower_subject needs a measured face box before it can be proven safe")
         for r in rows:
-            r.executable = False
+            r.executable, r.status, r.status_reason = False, EventStatus.PLANNING_ONLY.value, why
     return rows
 
 
@@ -556,30 +654,38 @@ def plan_rhythm(
             lo = max(cursor + calm, w0)
             latest = w1 - policy.excursion_min_s - policy.slow_ease_s
             safe = [b for b in bounds if b.safe and lo <= b.t <= latest]
+            extended = not any(b.t - cursor <= policy.attention_guard_s for b in safe)  # no phrase boundary within reach
+            ext = _extension_pool(bounds, lo, latest, cursor, policy, hints) if extended else []
             near = [b for b in safe if b.t - cursor <= policy.horizon_s]
-            pool = near or safe[:1]  # no safe boundary within the horizon: the hold extends to the next one that exists
+            pool = ext or near or safe[:1]  # nothing in reach: the hold extends to the next phrase boundary that exists
+            states = EXTENSION_STATES if ext else tuple(x for x in EXCURSIONS if x is not S.RAISE_SUBJECT or policy.plan_raise_subject)
             if not pool:
                 break
-            best: tuple[float, S, Boundary, Boundary, dict[str, float], dict[str, str], str] | None = None
+            best: tuple[float, S, Boundary, Boundary, float, dict[str, float], dict[str, str]] | None = None
             second: tuple[float, S] | None = None
             excluded: dict[str, str] = {}
+            if not ext and not policy.plan_raise_subject:
+                excluded["raise_subject"] = "planning-only: the renderer cannot pad above the source frame"
             for b in pool:
-                rel = _release(b.t, bounds, policy, w1 - policy.slow_ease_s)
-                if rel is None:
-                    continue
                 hold = b.t - cursor
                 gap = b.t - last_excursion_start if last_excursion_start is not None else hold
-                for state in EXCURSIONS:
+                for state in states:
+                    is_smooth = state in SMOOTH_STATES
+                    rel = _release(b.t, bounds, policy, w1 if is_smooth else w1 - policy.ease_s, smooth=is_smooth)
                     banned = memory.excluded(state)
                     ok, comp, comp_why = _face_checks(state, policy, face_box)
+                    if rel is None:
+                        excluded.setdefault(f"{state.value}@{b.t:.2f}", "no boundary to settle on within the excursion length")
+                        continue
                     if banned or not ok:
                         excluded.setdefault(f"{state.value}@{b.t:.2f}", banned or comp_why)
                         continue
+                    settle, ret_start = rel
                     nov, nov_why = memory.novelty(state, gap)
                     sem, sem_why = _align(state, b.t, hints)
                     terms = {
                         "boundary": b.quality, "timing": timing_score(hold, policy), "novelty": nov, "composition": comp,
-                        "reset": rel.quality, "semantic": sem, "energy": 1.0 - abs(target - _ENERGY[state]),
+                        "reset": settle.quality, "semantic": sem, "energy": 1.0 - abs(target - _ENERGY[state]),
                         "caption": 1.0 - _CAPTION_RISK[state],
                     }
                     total = sum(WEIGHTS[k] * v for k, v in terms.items())
@@ -587,29 +693,38 @@ def plan_rhythm(
                     if best is None or key > (round(best[0], 6), -best[2].t, -EXCURSIONS.index(best[1])):
                         if best is not None:
                             second = (best[0], best[1])
-                        best = (total, state, b, rel, terms, {"nov": nov_why, "comp": comp_why, "sem": sem_why}, "")
+                        best = (total, state, b, settle, ret_start, terms, {"nov": nov_why, "comp": comp_why, "sem": sem_why})
                     elif second is None or total > second[0]:
                         second = (total, state)
             if best is None:
                 break
-            total, state, b, rel, terms, why, _ = best
-            excursion = _rows_for(state, b.t, rel, policy, face_box)
+            total, state, b, rel, ret_start, terms, why = best
+            excursion = _rows_for(state, b.t, rel, ret_start, policy, face_box)
             if b.t - tile_from > 1e-6:
                 tiles.append(RhythmRow(start=round(tile_from, 3), end=b.t, state=S.BASE.value))
             lead = excursion[0]
             lead.boundary_kind, lead.boundary_quality, lead.boundary_after = b.kind, b.quality, b.after
             lead.history_reason = why["nov"] + (f"; {why['sem']}" if why["sem"] else "")
+            if ext:
+                lead.history_reason += (f"; extended hold: no phrase boundary within {policy.attention_guard_s:g}s, so a smooth {state.value} "
+                                        f"starts on a word boundary (quality {b.quality:.2f}), never mid-word")
             lead.composition_reason = why["comp"]
             lead.scores = {k: round(v, 3) for k, v in terms.items()} | {"total": round(total, 3)}
             tail = excursion[-1]
-            excursion[-1].reset_plan = (f"{tail.state} at {tail.start:.2f}s on a {rel.kind} boundary (quality {rel.quality:.2f}), "
-                                        f"back to base by {tail.end:.2f}s")
-            lead.reset_plan = excursion[-1].reset_plan
+            smooth_tail = tail.motion_class == MotionClass.SMOOTH.value
+            how = (f"glides {tail.start:.2f}-{tail.end:.2f}s and settles on base" if smooth_tail
+                   else f"snaps back at {tail.start:.2f}s, on base by {tail.end:.2f}s")
+            lead.reset_plan = tail.reset_plan = f"{tail.state} {how} at a {rel.kind} boundary (quality {rel.quality:.2f})"
             tiles.extend(excursion)
             plan.decisions.append(RhythmDecision(
                 t=b.t, state=state.value, score=round(total, 3), breakdown=lead.scores, boundary_kind=b.kind,
                 hold_before=round(b.t - cursor, 3), excluded=dict(sorted(excluded.items())[:6]), runner_up=second[1].value if second else None))
-            plan.changes.extend([b.t, tail.start])
+            if state is S.SLOW_PUSH:
+                plan.changes.extend([b.t, tail.start, tail.end])
+            elif smooth_tail:
+                plan.changes.extend([b.t, lead.end, tail.start, tail.end])
+            else:
+                plan.changes.extend([b.t, tail.start])
             memory.push(state, b.t - last_excursion_start if last_excursion_start is not None else b.t - cursor)
             last_excursion_start = b.t
             cursor = tile_from = tail.end
@@ -695,7 +810,30 @@ def headline_allowed(state: str, kind: str | None, confidence: float | None, phr
 
 
 __all__ = [
-    "EXCURSIONS", "MAX_PHRASE_WORDS", "SAFE_QUALITY", "SEMANTIC_ENHANCEMENTS", "VOCABULARY", "WEIGHTS", "Boundary", "Occupied",
-    "RhythmDecision", "RhythmPlan", "RhythmPolicy", "RhythmRow", "RhythmState", "SemanticHint", "entries", "find_boundaries", "headline_allowed",
-    "inside_word", "plan_rhythm", "semantic_enhancement_options", "timing_score",
+    "ABRUPT_STATES",
+    "EXCURSIONS",
+    "EXTENSION_STATES",
+    "MAX_PHRASE_WORDS",
+    "SAFE_QUALITY",
+    "SEMANTIC_ENHANCEMENTS",
+    "SMOOTH_STATES",
+    "VOCABULARY",
+    "WEIGHTS",
+    "Boundary",
+    "Occupied",
+    "RhythmDecision",
+    "RhythmPlan",
+    "RhythmPolicy",
+    "RhythmRow",
+    "RhythmState",
+    "SemanticHint",
+    "entries",
+    "find_boundaries",
+    "headline_allowed",
+    "inside_word",
+    "motion_class",
+    "plan_rhythm",
+    "row_event",
+    "semantic_enhancement_options",
+    "timing_score",
 ]

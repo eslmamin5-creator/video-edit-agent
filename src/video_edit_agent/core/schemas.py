@@ -92,6 +92,10 @@ class ZoomRamp(BaseModel):
     end_s: float
     zoom_to: float
     easing: str = "smoothstep"  # smoothstep | linear
+    # Where the anchor point eases to over the same span (None = it stays where it is). The crop window is then
+    # animated in both axes, so a reframe / lower_subject glides instead of jumping.
+    anchor_x_to: float | None = None
+    anchor_y_to: float | None = None
 
 
 class Reframe(BaseModel):
@@ -107,6 +111,7 @@ class Reframe(BaseModel):
     anchor_y: float = DEFAULT_ZOOM_ANCHOR_Y
     face_box: tuple[float, float, float, float] | None = None
     face_margin: float = 0.04
+    owner: str | None = None  # "camera_timeline" when the canonical camera timeline produced it; None = a legacy planner
 
 
 class EDLClip(BaseModel):
