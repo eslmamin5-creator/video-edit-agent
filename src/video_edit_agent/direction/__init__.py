@@ -17,6 +17,14 @@ from video_edit_agent.direction.hierarchy import VisualHierarchy, build_hierarch
 from video_edit_agent.direction.history import FatigueReading, TreatmentHistory
 from video_edit_agent.direction.replacement import SpeakerReplacement
 from video_edit_agent.direction.reset_grammar import CameraStory, camera_story
+from video_edit_agent.direction.rhythm import (
+    RhythmPlan,
+    RhythmPolicy,
+    RhythmRow,
+    RhythmState,
+    plan_rhythm,
+    semantic_enhancement_options,
+)
 from video_edit_agent.direction.semantic_beats import (
     SemanticBeat,
     SemanticKind,
@@ -24,7 +32,11 @@ from video_edit_agent.direction.semantic_beats import (
     to_director_beats,
 )
 from video_edit_agent.direction.speed import SpeedEvent, plan_speed
-from video_edit_agent.direction.suitability import BehindSubjectEvidence, assess_behind_subject
+from video_edit_agent.direction.suitability import (
+    BehindSubjectEvidence,
+    assess_behind_subject,
+    behind_subject_eligibility,
+)
 from video_edit_agent.direction.transitions import TransitionStyle, select_transition
 from video_edit_agent.direction.vocabulary import VOCABULARY
 
@@ -39,6 +51,10 @@ __all__ = [
     "CameraStory",
     "DirectionResult",
     "FatigueReading",
+    "RhythmPlan",
+    "RhythmPolicy",
+    "RhythmRow",
+    "RhythmState",
     "SemanticBeat",
     "SemanticKind",
     "SpeakerReplacement",
@@ -48,12 +64,15 @@ __all__ = [
     "VisualDecision",
     "VisualHierarchy",
     "assess_behind_subject",
+    "behind_subject_eligibility",
     "build_hierarchy",
     "camera_story",
     "detect_semantic_beats",
     "direct",
     "plan_camera",
+    "plan_rhythm",
     "plan_speed",
     "select_transition",
+    "semantic_enhancement_options",
     "to_director_beats",
 ]

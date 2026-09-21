@@ -276,6 +276,7 @@ GENERIC = [
     "sound/planner.py", "sound/__init__.py", "direction/vocabulary.py", "direction/replacement.py",
     "direction/camera.py", "direction/transitions.py", "direction/speed.py", "direction/suitability.py",
     "direction/director.py", "direction/__init__.py", "captions/modes.py", "review/edit_plan_direction.py",
+    "direction/rhythm.py", "review/edit_plan_rhythm.py",
 ]
 FORBIDDEN = [
     r"#0a3d62", r"#8e44ad", r"#f1c40f", r"video-ad-editor", r"LI-SEP", r"\b38\.94\b",

@@ -23,6 +23,7 @@ from pathlib import Path
 from video_edit_agent.broll.prompt import NO_TEXT_RULES, REALISM_RULES
 from video_edit_agent.broll.treatment import load_decisions
 from video_edit_agent.core.schemas import EDL
+from video_edit_agent.direction.rhythm import entries
 from video_edit_agent.review import edit_plan as ep
 from video_edit_agent.review import edit_plan_commands as cmd
 from video_edit_agent.review import edit_plan_direction as direction
@@ -268,6 +269,40 @@ def _text_lines(slot: EditPlanSlot, ar: bool) -> list[str]:
         return ["On-screen text: not chosen — send it as `N النص: ...`" if not ar else "النص: لسه ماتحددش — ابعته كده `N النص: ...`"]
     opts = [f"  {chr(65 + i)}) {o}" for i, o in enumerate(slot.text_options)]
     return ["Text options (from what the speaker said):", *opts]
+
+
+def format_rhythm_map(plan: EditPlan) -> str:
+    """The visual rhythm map: one entry per planned state change (an excursion shows its move, hold and return together).
+    Planning metadata only: nothing here renders, and none of it blocks review."""
+    if not plan.rhythm:
+        return ""
+    out = ["Visual rhythm map (framing variation; proposals, nothing renders yet)"]
+    for group in entries(plan.rhythm):
+        lead, last = group[0], group[-1]
+        chain = " -> ".join(dict.fromkeys(r.state for r in group))
+        head = f"[R{lead.number}] {timestamp(lead.start)}-{timestamp(last.end)}  ({last.end - lead.start:.2f}s)  {chain}"
+        if lead.source != "rhythm":
+            head += f"  [{'your decision' if lead.source == 'pinned' else 'semantic director'}]"
+        lines = [head]
+        if lead.transcript_context:
+            lines.append(f"  Spoken: «{lead.transcript_context[:110]}»")
+        if lead.source == "rhythm" and lead.state != "base":
+            lines.append(f"  Phrase boundary: {lead.boundary_kind} (quality {lead.boundary_quality:.2f}) before «{lead.boundary_after}»")
+            lines.append(f"  Why now: {lead.history_reason}")
+            pending = "" if all(r.executable for r in group) else "  [renderer support pending: not in the executable camera plan]"
+            lines.append(f"  Composition: {lead.composition_reason}{pending}")
+            lines.append(f"  Return: {lead.reset_plan}")
+        elif lead.source == "rhythm":
+            lines.append("  Holds on the base framing (no safe phrase boundary to move on, or the moment is left calm)")
+        sem = lead.semantic_enhancement + (f" (options: {', '.join(lead.semantic_options)})" if lead.semantic_options else "")
+        conf = f"{lead.semantic_kind} {lead.semantic_confidence:.2f}" if lead.semantic_confidence is not None else "no reading"
+        lines.append(f"  Semantic: {sem} | confidence: {conf}")
+        lines.append(f"  Primary: {lead.primary_layer} | captions: {lead.caption_role} | speaker: {lead.speaker_visibility}")
+        bs = lead.behind_subject + (f" ({lead.behind_subject_reason})" if lead.behind_subject_reason else "")
+        lines.append(f"  Behind-subject: {bs}")
+        lines.append(f"  Sound: intent {lead.sound_intent}, status {lead.sound_status} | Approval: {lead.approval_status}")
+        out.append("\n".join(lines))
+    return "\n\n".join(out)
 
 
 def summary(plan: EditPlan, lang: str = "ar") -> str:
@@ -522,10 +557,12 @@ class EditPlanChat:
         else:
             body = "مفيش حاجة بالشكل ده." if ar else "Nothing matches."
         footer = summary(plan, self.lang)
+        if command.view == cmd.VIEW_ALL and plan.rhythm:
+            body += "\n\n" + format_rhythm_map(plan)
         text = "\n\n".join(part for part in (prefix, body, footer) if part)
         return ChatReply(text=text, changed=changed, note=prefix, body=f"{body}\n\n{footer}")
 
 
 __all__ = [
-    "EditPlanChat", "format_help", "format_slot", "generation_risk", "label", "open_edit_plan", "summary",
+    "EditPlanChat", "format_help", "format_rhythm_map", "format_slot", "generation_risk", "label", "open_edit_plan", "summary",
 ]

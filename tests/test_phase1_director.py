@@ -39,6 +39,7 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "video_edit_agent"
 GENERIC = [
     "direction/semantic_beats.py", "direction/history.py", "direction/reset_grammar.py", "direction/hierarchy.py",
     "direction/director.py", "direction/transitions.py", "review/edit_plan_direction.py",
+    "direction/rhythm.py", "direction/suitability.py", "review/edit_plan_rhythm.py",
 ]
 
 

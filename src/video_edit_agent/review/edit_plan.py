@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from video_edit_agent.broll.treatment import BROLL_TREATMENTS, Treatment, TreatmentDecision
 from video_edit_agent.core.schemas import EDL, Transcript
+from video_edit_agent.direction.rhythm import RhythmRow
 
 PLAN_FILENAME = "edit_plan.json"
 NO_TREATMENT = "no_treatment"
@@ -159,6 +160,7 @@ class EditPlan(BaseModel):
     slots: list[EditPlanSlot] = Field(default_factory=list)
     sound_profile: str = "none"  # a profile choice only: none | minimal | dynamic
     last_slot: int | None = None  # the slot the user was last looking at ("ok" alone means this one)
+    rhythm: list[RhythmRow] = Field(default_factory=list)  # Phase 1.2 visual rhythm map: planning metadata, never blocks review
 
     def slot(self, number: int) -> EditPlanSlot | None:
         return next((s for s in self.slots if s.number == number and number > 0), None)
