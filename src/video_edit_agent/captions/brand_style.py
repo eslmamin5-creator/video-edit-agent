@@ -81,6 +81,11 @@ def resolve_brand_caption_style(preset_name: str, brand: Brand) -> ResolvedCapti
     elif style.background == "outline":
         style.outline_color = hex_to_ass(brand.colors.primary)
 
+    if caps.mode:
+        from video_edit_agent.captions.modes import apply_mode
+
+        style = apply_mode(style, caps.mode)
+
     balance = caps.balance_lines if caps.balance_lines is not None else caps.use_brand_colors
     if balance:
         style.line_break_chars = _DEFAULT_LINE_BREAK_CHARS

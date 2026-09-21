@@ -25,12 +25,14 @@ from video_edit_agent.broll.treatment import load_decisions
 from video_edit_agent.core.schemas import EDL
 from video_edit_agent.review import edit_plan as ep
 from video_edit_agent.review import edit_plan_commands as cmd
+from video_edit_agent.review import edit_plan_direction as direction
 from video_edit_agent.review import state as review_state
 from video_edit_agent.review import text_copy
 from video_edit_agent.review.chat_session import ChatReply
 from video_edit_agent.review.corrections import apply_corrections, load_corrections
 from video_edit_agent.review.edit_plan import EditPlan, EditPlanSlot, SlotStatus
 from video_edit_agent.review.schemas import ApprovalStatus
+from video_edit_agent.sound.registry import SfxRegistry, default_sfx_dir, load_registry
 from video_edit_agent.transcription.router import load_transcript
 
 TRANSCRIPT_FILENAME = "transcript_unified.json"
@@ -45,6 +47,9 @@ _LABEL = {
     "motion_graphic": ("Motion graphic", "Motion graphic"),
     "local_broll": ("Local / your own B-roll", "B-roll محلي (بتاعك)"),
     "generated_broll": ("AI-generated B-roll", "B-roll مولَّد بالـAI"),
+    "illustration": ("Illustration", "Illustration (رسم توضيحي)"),
+    "graphic_data_scene": ("Data graphic scene", "مشهد بيانات/انفوجراف"),
+    "full_screen_text_scene": ("Full-screen text scene", "مشهد نص بملء الشاشة"),
     "no_treatment": ("No treatment", "من غير تدخل"),
 }
 _SEES = {
@@ -55,7 +60,22 @@ _SEES = {
     "motion_graphic": ("A simple animated graphic (shapes/lines, no invented text or numbers).", "رسم متحرك بسيط (أشكال/خطوط من غير نص أو أرقام مخترعة)."),
     "local_broll": ("A cutaway of your own real footage while the speaker keeps talking.", "قطع على لقطات حقيقية بتاعتك والمتحدث بيكمّل كلام."),
     "generated_broll": ("An AI-generated cutaway while the speaker keeps talking.", "قطع على لقطة مولَّدة بالـAI والمتحدث بيكمّل كلام."),
+    "illustration": ("A simple illustration replaces the speaker while the voice continues.", "رسم توضيحي بسيط بيحل مكان المتحدث والصوت مكمّل."),
+    "graphic_data_scene": ("A data/graphic scene (real figures only) replaces the speaker while the voice continues.", "مشهد بيانات (من أرقام حقيقية بس) بيحل مكان المتحدث والصوت مكمّل."),
+    "full_screen_text_scene": ("A full-screen text scene replaces the speaker while the voice continues.", "مشهد نص بملء الشاشة بيحل مكان المتحدث والصوت مكمّل."),
     "no_treatment": ("Nothing added; the plain speaker shot.", "مفيش إضافة؛ لقطة المتحدث زي ما هي."),
+}
+_INTENT_LABEL = {
+    "none": ("none", "من غير"),
+    "subtle_motion": ("subtle motion", "حركة خفيفة"),
+    "transition": ("transition", "انتقال"),
+    "accent": ("accent", "أكسنت"),
+    "impact": ("impact", "امباكت"),
+}
+_CAMERA_LABEL = {
+    "static": "static", "punch_in": "punch-in", "punch_out": "punch-out", "slow_push": "slow push",
+    "reframe_left": "reframe left", "reframe_right": "reframe right", "reset_to_base": "reset to base",
+    "n/a": "n/a (speaker replaced)",
 }
 _STATUS = {
     SlotStatus.PENDING_REVIEW: "PENDING",
@@ -144,6 +164,8 @@ def format_slot(slot: EditPlanSlot, lang: str = "ar") -> str:
     if slot.reason:
         lines.append(f"Why: {slot.reason}")
     lines.append(f"What you would see: {_SEES[slot.treatment][0 if not ar else 1]}")
+    if slot.directed:
+        lines.extend(_direction_lines(slot, ar))
     lines.append(f"Needs asset: {'YES' if slot.needs_asset else 'NO'}")
     lines.append(f"AI generation: {'YES' if slot.needs_generation else 'NO'}")
     if slot.treatment == "generated_broll":
@@ -156,6 +178,26 @@ def format_slot(slot: EditPlanSlot, lang: str = "ar") -> str:
         lines.append(("بدائل: " if ar else "Alternatives: ") + " / ".join(label(a, lang) for a in slot.alternatives))
     lines.append(f"Status: {_STATUS[slot.status]}" if not slot.settled else f"Status: {_STATUS[slot.status]} — {slot.settled_reason}")
     return "\n".join(lines)
+
+
+def _direction_lines(slot: EditPlanSlot, ar: bool) -> list[str]:
+    """The per-beat direction block: what the speaker does, the camera, the cut, the sound and the captions."""
+    i = 1 if ar else 0
+    speaker = (("visible" if not ar else "ظاهر") if slot.speaker_visible
+               else ("hidden, voice continues" if not ar else "مخفي والصوت مكمّل"))
+    caption = slot.caption_mode if slot.caption_mode != "unchanged" else ("current" if not ar else "زي الحالي")
+    caption += f", {slot.caption_behavior}" if slot.caption_behavior != "normal" else ""
+    mine = (" (your choice)" if not ar else " (اختيارك)") if slot.sound_locked else ""
+    return [
+        f"Visual: {label(slot.treatment, 'ar' if ar else 'en')}",
+        f"Speaker: {speaker}",
+        f"Camera: {_CAMERA_LABEL.get(slot.camera, slot.camera)}",
+        f"Transition: {direction.transition_label(slot)}",
+        f"Sound intent: {_INTENT_LABEL.get(slot.sound_intent, (slot.sound_intent,) * 2)[i]}{mine}",
+        f"SFX availability: {slot.sfx_availability or 'none'}",
+        f"Caption behavior: {caption}",
+        *[f"Note: {n}" for n in slot.direction_notes],
+    ]
 
 
 def _generated_lines(slot: EditPlanSlot, ar: bool) -> list[str]:
@@ -212,6 +254,7 @@ def format_help(lang: str = "ar") -> str:
             "  4 استخدم B-roll محلي           ← لو معندكش footage بيتطبق الـfallback\n"
             "  5 اختار الخيار B | 5 النص: <كلمة>   ← نص ورا المتحدث\n"
             "  3 ولّد                          ← إذن صريح بتوليد B-roll الـslot ده بس\n"
+            "  4 من غير sound | 4 sound accent | 4 sound accent بدل transition   ← نية الصوت للـslot\n"
             "  2 بلاش                          ← من غير أي تدخل\n"
             "  اعتمد الباقي | وريني بس الحاجات اللي محتاجة asset | وريني الـgenerated فقط | وريني الكل"
         )
@@ -223,6 +266,7 @@ def format_help(lang: str = "ar") -> str:
         "  4 use local B-roll             without footage the fallback applies\n"
         "  5 choose option B | 5 text: <word>   text behind the speaker\n"
         "  3 generate                     explicit permission to generate THIS slot only\n"
+        "  4 no sound | 4 sound accent | 4 sound accent instead of transition   sound intent for the slot\n"
         "  2 skip                         no treatment\n"
         "  approve the rest | show only what needs an asset | show only the generated | show all"
     )
@@ -318,11 +362,18 @@ class EditPlanChat:
             return self._confirm(slot)
         if kind == cmd.KIND_SET_TREATMENT:
             ep.set_treatment(slot, command.treatment or "")
+            direction.retarget(plan, slot, self._registry())
             if slot.needs_text:
                 return self._needs_text(slot, changed=True)
             return self._confirm(slot)
+        if kind == cmd.KIND_SET_SOUND:
+            if not slot.directed:
+                return (f"[{n}] الـslot ده مالوش تحكم في الصوت." if ar else f"[{n}] this slot has no sound control.")
+            direction.set_slot_sound(plan, slot, command.sound or "none", self._registry())
+            return self._sound_confirm(slot)
         if kind == cmd.KIND_REJECT:
             ep.reject_slot(slot)
+            direction.retarget(plan, slot, self._registry())
             return (f"✔ [{n}] اتلغى — من غير أي تدخل (المتحدث زي ما هو)." if ar
                     else f"✔ [{n}] no treatment — the plain speaker shot stays.")
         if kind == cmd.KIND_CHOOSE_OPTION:
@@ -351,6 +402,18 @@ class EditPlanChat:
             return (f"✔ [{n}] التوليد معتمد للـslot ده بس. لسه ما اتولّدش حاجة." if ar
                     else f"✔ [{n}] generation approved for this slot only. Nothing has been generated.")
         return f"[{n}] ?"
+
+    def _registry(self) -> SfxRegistry:
+        return load_registry(default_sfx_dir())
+
+    def _sound_confirm(self, slot: EditPlanSlot) -> str:
+        ar = self.lang == "ar"
+        n, i = slot.number, 1 if ar else 0
+        intent = _INTENT_LABEL.get(slot.sound_intent, (slot.sound_intent,) * 2)[i]
+        line = f"✔ [{n}] " + (f"الصوت: {intent}" if ar else f"Sound: {intent}")
+        if slot.sound_intent != "none":
+            line += f" — SFX: {slot.sfx_availability or 'none'}"
+        return line
 
     def _needs_text(self, slot: EditPlanSlot, *, changed: bool = False) -> str:
         ar = self.lang == "ar"

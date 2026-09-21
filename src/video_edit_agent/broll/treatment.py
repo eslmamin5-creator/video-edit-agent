@@ -36,6 +36,10 @@ class Treatment(str, Enum):
     MOTION_GRAPHIC = "motion_graphic"
     LOCAL_BROLL = "local_broll"
     GENERATED_BROLL = "generated_broll"
+    # Speaker replacements authored by the pipeline itself (see `direction.vocabulary`).
+    ILLUSTRATION = "illustration"
+    GRAPHIC_DATA_SCENE = "graphic_data_scene"
+    FULL_SCREEN_TEXT_SCENE = "full_screen_text_scene"
 
 
 BROLL_TREATMENTS = frozenset({Treatment.LOCAL_BROLL, Treatment.GENERATED_BROLL})

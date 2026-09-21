@@ -32,7 +32,10 @@ from video_edit_agent.core.schemas import EDL, Transcript
 PLAN_FILENAME = "edit_plan.json"
 NO_TREATMENT = "no_treatment"
 TREATMENTS = tuple(t.value for t in Treatment) + (NO_TREATMENT,)
-TEXT_TREATMENTS = frozenset({Treatment.BEHIND_SUBJECT_TEXT.value, Treatment.KINETIC_TYPOGRAPHY.value})
+TEXT_TREATMENTS = frozenset({
+    Treatment.BEHIND_SUBJECT_TEXT.value, Treatment.KINETIC_TYPOGRAPHY.value, Treatment.FULL_SCREEN_TEXT_SCENE.value,
+})
+SOUND_INTENTS = ("none", "subtle_motion", "transition", "accent", "impact")
 _GENERATED = Treatment.GENERATED_BROLL.value
 _LOCAL = Treatment.LOCAL_BROLL.value
 _MIN_OVERLAP_S = 0.05
@@ -71,6 +74,23 @@ class EditPlanSlot(BaseModel):
     generation_approved: bool = False
     text_options: list[str] = Field(default_factory=list)
     text: str | None = None  # the approved on-screen text (text treatments)
+    # ---- visual + sound direction (see `video_edit_agent.direction` / `.sound`) ----
+    # All defaulted, so a plan saved before the direction upgrade loads unchanged.
+    directed: bool = False  # this slot carries a director decision
+    speaker_visible: bool = True  # False: the speaker is replaced, the voice continues
+    camera: str = "n/a"  # static | punch_in | punch_out | slow_push | reframe_left | reframe_right | reset_to_base | n/a
+    transition: str = "direct_cut"  # what the renderer actually plays
+    transition_requested: str | None = None  # a stylized transition that is not executable yet
+    caption_mode: str = "unchanged"  # none | adaptive | plate | unchanged
+    caption_behavior: str = "normal"  # normal | reduced (never hidden)
+    sound_intent: str = "none"
+    sound_event: str | None = None  # the visual event a sound could sit on
+    sound_status: str = "none"  # none | suppressed | unavailable | scheduled
+    sound_importance: float | None = None  # the beat's semantic weight (None = the event type's default)
+    sound_locked: bool = False  # the user chose the sound intent explicitly
+    sfx_availability: str = "none"
+    beat_kind: str | None = None
+    direction_notes: list[str] = Field(default_factory=list)
 
     @property
     def duration(self) -> float:
@@ -111,6 +131,7 @@ class EditPlanSlot(BaseModel):
 
 class EditPlan(BaseModel):
     slots: list[EditPlanSlot] = Field(default_factory=list)
+    sound_profile: str = "none"  # a profile choice only: none | minimal | dynamic
     last_slot: int | None = None  # the slot the user was last looking at ("ok" alone means this one)
 
     def slot(self, number: int) -> EditPlanSlot | None:
@@ -309,6 +330,15 @@ def set_treatment(slot: EditPlanSlot, treatment: str) -> EditPlanSlot:
         slot.generation_approved = False  # generation was for the generated treatment only
     slot.treatment = treatment
     slot.status = _after_choice(slot, SlotStatus.APPROVED if treatment == slot.recommended else SlotStatus.CHANGED)
+    return slot
+
+
+def set_sound_intent(slot: EditPlanSlot, intent: str) -> EditPlanSlot:
+    """The user chose the sound intent for this slot (`none` = no sound). A choice of the
+    reviewer, not of the AI: it survives a re-direction. It never changes the visual treatment."""
+    if intent not in SOUND_INTENTS:
+        raise ValueError(f"unknown sound intent '{intent}'")
+    slot.sound_intent, slot.sound_locked = intent, True
     return slot
 
 

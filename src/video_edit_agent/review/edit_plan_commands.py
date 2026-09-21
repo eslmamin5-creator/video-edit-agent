@@ -42,6 +42,7 @@ KIND_REJECT = "reject"
 KIND_CHOOSE_OPTION = "choose_option"
 KIND_SET_TEXT = "set_text"
 KIND_APPROVE_GENERATION = "approve_generation"
+KIND_SET_SOUND = "set_sound"
 KIND_HELP = "help"
 KIND_UNKNOWN = "unknown"
 
@@ -57,6 +58,7 @@ class Command:
     kind: str
     numbers: tuple[int, ...] = ()
     treatment: str | None = None  # set_treatment: a `Treatment` value or "no_treatment"
+    sound: str | None = None  # set_sound: a sound intent (none | subtle_motion | transition | accent | impact)
     option: int | None = None  # choose_option: 0-based (A=0)
     text: str | None = None  # set_text: verbatim
     view: str | None = None
@@ -67,6 +69,9 @@ class Command:
 _TREATMENT_PATTERNS: tuple[tuple[str, str], ...] = (
     ("behind_subject_text", (r"behind[\s-]*(?:the\s+)?(?:subject|speaker|person)(?:\s*text)?|behind[\s-]*text|"
                             r"(?:ورا|وراء|خلف)\s*(?:ال)?(?:متحدث|شخص|سبيكر|speaker|راجل|بني ادم)|نص\s*(?:ورا|خلف)(?:\s*(?:ال)?(?:متحدث|شخص|سبيكر|speaker))?")),
+    ("full_screen_text_scene", r"full[\s-]*screen\s*(?:text|typography|title)|نص\s*(?:ملء|كامل)\s*(?:ال)?شاش\w*|شاشه\s*كامله\s*نص"),
+    ("graphic_data_scene", r"data\s*(?:scene|graphics?|viz|visuali[sz]ation)|infographics?|انفوجراف\w*|رسم\s*بياني|chart"),
+    ("illustration", r"illustrat\w*|ايلستريشن|رسمه\s*توضيحي\w*|رسم\s*توضيحي"),
     ("kinetic_typography", r"kinetic(?:\s*typography)?|typography|كينتيك|تايبوجراف\w*|نص\s*متحرك|كلام\s*متحرك"),
     ("motion_graphic", r"motion[\s-]*graphics?|موشن(?:\s*جرافيك)?|جرافيك|graphics?|animation|انيميشن|رسم\s*متحرك"),
     ("punch_in", r"punch[\s-]*in|بانش(?:\s*ان)?|زوو?م|zoom|re-?frame|ريفريم"),
@@ -137,10 +142,48 @@ def find_treatment(bare: str) -> str | None:
             if hit:
                 spans.append((m.start(), hit.end()))
     keep = "".join(text[i] if not any(a <= i < b for a, b in spans) else " " for i in range(len(text)))
-    hits = [(hit.start(), name) for name, rx in _TREATMENT_RE for hit in rx.finditer(keep)]
+    found = [(hit.start(), hit.end(), name) for name, rx in _TREATMENT_RE for hit in rx.finditer(keep)]
+    # "data graphic" is one treatment, not "data" + "graphic": a mention inside a longer one is part of it.
+    found = [h for h in found if not any(o[2] != h[2] and o[0] <= h[0] and h[1] <= o[1] and (o[1] - o[0]) > (h[1] - h[0]) for o in found)]
+    hits = [(start, name) for start, _end, name in found]
     # "speaker" is also a passing noun ("punch in on the speaker"): it only counts when nothing else was asked for.
     specific = [h for h in hits if h[1] != "stay_on_speaker"]
     return max(specific or hits, default=(0, None))[1]
+
+
+_SOUND_WORD = re.compile(r"(?<![\w])(?:sounds?|sfx|sound\s*effects?|effects?|ساوند|سواند|صوت(?:ي|يه)?|اصوات|مؤثر\w*|موثر\w*)(?![\w])", re.IGNORECASE)
+_NO_SOUND = re.compile(
+    r"(?:من\s*غير|بدون|بلاش|مفيش|شيل\w*|احذف\w*|no|without|remove|skip|drop|mute|silent|off)\s*(?:اي\s*)?(?:ال)?"
+    r"(?:sounds?|sfx|sound\s*effects?|effects?|ساوند|سواند|صوت|اصوات|مؤثر\w*|موثر\w*)", re.IGNORECASE)
+_NO_SOUND_TRAILING = re.compile(r"(?:sounds?|sfx|ساوند|سواند|صوت)\s*(?:off|none|بلاش|مش\s*محتاج\w*)", re.IGNORECASE)
+_SOUND_INTENT_PATTERNS = (
+    ("subtle_motion", r"subtle(?:[\s_-]*motion)?|motion[\s_-]*sound|خفيف\w*|هادي"),
+    ("transition", r"transition|whoosh|sweep|انتقال\w*|ترانزيشن"),
+    ("accent", r"accents?|tick|اكسنت|أكسنت|تيك"),
+    ("impact", r"impact|hit|thud|امباكت|إمباكت"),
+)
+_SOUND_INTENT_RE = [(name, re.compile(rx, re.IGNORECASE)) for name, rx in _SOUND_INTENT_PATTERNS]
+
+
+def find_sound(bare: str) -> str | None:
+    """The sound intent a message asks for, or None when it is not about sound.
+
+    Sound is only mentioned with a sound word (`sound`, `sfx`, `صوت` ...), so a bare `transition`
+    stays a visual word. "without/no sound" -> `none`; "sound accent instead of transition" -> `accent`
+    (a mention right after `instead of` is what the user is moving away from)."""
+    if not _SOUND_WORD.search(bare):
+        return None
+    if _NO_SOUND.search(bare) or _NO_SOUND_TRAILING.search(bare):
+        return "none"
+    keep = list(bare)
+    for m in _REPLACED.finditer(bare):
+        for _, rx in _SOUND_INTENT_RE:
+            hit = rx.match(bare, m.end())
+            if hit:
+                keep[m.start():hit.end()] = " " * (hit.end() - m.start())
+    text = "".join(keep)
+    hits = [(hit.start(), name) for name, rx in _SOUND_INTENT_RE for hit in rx.finditer(text)]
+    return max(hits)[1] if hits else None
 
 
 def parse(message: str) -> Command:
@@ -182,6 +225,10 @@ def parse(message: str) -> Command:
         if option >= 0:
             return Command(KIND_CHOOSE_OPTION, numbers=slot, option=option)
 
+    sound = find_sound(bare)
+    if sound is not None:
+        return Command(KIND_SET_SOUND, numbers=numbers[:1], sound=sound)
+
     negated = bool(_NEGATION.search(bare))
     if _GENERATE_OK.search(bare) and not negated:
         return Command(KIND_APPROVE_GENERATION, numbers=numbers[:1])
@@ -203,4 +250,4 @@ def split_entries(message: str) -> list[str]:
     return split_message(message)
 
 
-__all__ = ["Command", "find_treatment", "parse", "split_entries"]
+__all__ = ["Command", "find_sound", "find_treatment", "parse", "split_entries"]

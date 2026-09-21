@@ -37,6 +37,16 @@ class BrandCaptions(BaseModel):
     # dominating the frame.
     box_opacity: float = Field(default=0.55, ge=0.0, le=1.0)
     box_padding: float = Field(default=8.0, ge=0.0, le=40.0)
+    # Caption readability mode: "none" | "adaptive" | "plate" (see `captions.modes`).
+    # None keeps the behaviour implied by `background` (existing brands are unchanged).
+    mode: str | None = None
+
+
+class BrandSound(BaseModel):
+    """Sound direction is a PROFILE choice only (none | minimal | dynamic). There is no per-brand
+    SFX library; sounds come from the shared registry (see `video_edit_agent.sound`)."""
+
+    profile: str = "none"
 
 
 class BrandMotion(BaseModel):
@@ -121,6 +131,7 @@ class Brand(BaseModel):
     logo_rules: str | None = None
     captions: BrandCaptions = Field(default_factory=BrandCaptions)
     motion: BrandMotion = Field(default_factory=BrandMotion)
+    sound: BrandSound = Field(default_factory=BrandSound)
     broll_aesthetic: str | None = None
     cta: BrandCTA = Field(default_factory=BrandCTA)
     safe_zones: dict[str, float] = Field(default_factory=dict)
