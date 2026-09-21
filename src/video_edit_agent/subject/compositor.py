@@ -20,7 +20,9 @@ from video_edit_agent.subject import mask_cache
 from video_edit_agent.subject.detect import SubjectDetectionUnavailable
 from video_edit_agent.subject.refine import (
     REFINE_VERSION,
+    MatteReport,
     refine_alpha,
+    refine_matte,
     stabilize_temporal,
     to_canvas,
 )
@@ -159,12 +161,54 @@ def stabilized_clip(clip: SegmentedClip, size: tuple[int, int]) -> SegmentedClip
     )
 
 
-def refined_canvas_masks(clip: SegmentedClip, size: tuple[int, int]) -> tuple[list[float], list[np.ndarray]]:
-    """(sample times, cleaned alpha at canvas size) for the placement search: the
-    stabilised samples through `refine_alpha` (edge tightening, island and hole
-    cleanup; the picture-guided edge snap happens per output frame in the cutout)."""
+def canvas_frames(clip: SegmentedClip, size: tuple[int, int]) -> list[np.ndarray]:
+    """The source frames at the times of `clip`'s mask samples, framed like the render
+    canvas (uint8 HxWx3): the picture the colour evidence of the matte is read from.
+    Empty when ffmpeg cannot extract them."""
+    from PIL import Image
+
+    if not clip.frame_times:
+        return []
+    width, height = size
+    start = clip.frame_times[0]
+    duration = len(clip.frame_times) / clip.fps_sampled
+    with tempfile.TemporaryDirectory() as tmp:
+        pattern = str(Path(tmp) / "f_%05d.png")
+        result = run(
+            [
+                "ffmpeg", "-y", "-ss", str(start), "-t", str(duration), "-i", clip.source_path,
+                "-vf", f"fps={clip.fps_sampled},scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}",
+                pattern,
+            ],
+            timeout=180,
+        )
+        if result.returncode != 0:
+            return []
+        frames = [np.array(Image.open(f).convert("RGB")) for f in sorted(Path(tmp).glob("f_*.png"))]
+    if not frames:
+        return []
+    while len(frames) < len(clip.frame_times):  # the last sample can fall past the end of the footage
+        frames.append(frames[-1])
+    return frames[: len(clip.frame_times)]
+
+
+def refined_canvas_masks(
+    clip: SegmentedClip, size: tuple[int, int],
+) -> tuple[list[float], list[np.ndarray], list[MatteReport]]:
+    """(sample times, hair-safe alpha at canvas size, what the refinement did to each)
+    for the placement search: the stabilised samples through `refine_matte` with the
+    picture of each sample as the colour guide, exactly the maths of the cutout (which
+    then runs it on every output frame). Without frames there is no colour guide, so
+    the reports say `evidence_used=False` and the gate rejects the matte."""
     stable = stabilized_clip(clip, size)
-    return list(stable.frame_times), [refine_alpha(m) for m in stable.masks]
+    frames = canvas_frames(clip, size)
+    masks: list[np.ndarray] = []
+    reports: list[MatteReport] = []
+    for i, m in enumerate(stable.masks):
+        alpha, report = refine_matte(m, frames[i] if i < len(frames) else None)
+        masks.append(alpha)
+        reports.append(report)
+    return list(stable.frame_times), masks, reports
 
 
 def render_subject_cutout(
@@ -185,9 +229,10 @@ def render_subject_cutout(
 
     `output_size` scales-to-cover and centre-crops the frames to the render
     canvas so the cutout is not stored at source (4K) resolution. `refine` runs
-    the deterministic mask clean-up (`subject/refine.py`: temporal blend, edge
-    tightening, island/hole cleanup, picture-guided edge snap, halo pull-in); it
-    needs `output_size`.
+    the deterministic, hair-safe matte (`subject/refine.py`: temporal blend, core
+    clean-up, colour evidence for hair the model missed, outward feather); it needs
+    `output_size`. The RGB of every cutout frame is the ORIGINAL source frame; only the
+    alpha comes from the matte.
 
     Returns None (never raises) if segmentation is unavailable, extraction
     fails, or no usable mask was found -- callers must fall back to a plain

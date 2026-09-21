@@ -85,7 +85,8 @@ from video_edit_agent.subject.compositor import (
     to_source_window,
 )
 from video_edit_agent.subject.framing import Box, FrameAnalysis, analyze_clip
-from video_edit_agent.subject.refine import mask_stability
+from video_edit_agent.subject.integrity import DEFAULT_MATTE_POLICY, MatteGatePolicy, assess_matte
+from video_edit_agent.subject.refine import MatteReport, mask_stability
 
 BEHIND_SUBJECT_TEXT = Treatment.BEHIND_SUBJECT_TEXT.value
 _APPROVED = {SlotStatus.APPROVED, SlotStatus.CHANGED, SlotStatus.GENERATION_APPROVED}
@@ -110,6 +111,7 @@ class TreatmentPreset:
     outline_frac: float = 0.03  # of the font size, only when contrast needs it
     max_lines: int = 3
     sample_fps: float = 10.0  # subject mask sampling over the short show window
+    matte: MatteGatePolicy = DEFAULT_MATTE_POLICY  # when the subject matte is too unreliable to put text behind
 
 
 DEFAULT_PRESET = TreatmentPreset()
@@ -174,6 +176,7 @@ class SubjectData:
     masks: list[np.ndarray] = field(default_factory=list)
     face: Box | None = None
     analysis: FrameAnalysis | None = None
+    matte: list[MatteReport] = field(default_factory=list)  # what the refinement did to each mask
     reason: str = ""  # why there are no masks
 
     @property
@@ -199,9 +202,11 @@ def make_subject_loader(cache_dir: Path, preset: TreatmentPreset = DEFAULT_PRESE
         sampled = load_subject_clip(source, src_start, src_end, cache_dir, preset.sample_fps)
         if sampled is None:
             return SubjectData(reason="no usable subject mask")
-        times, masks = refined_canvas_masks(sampled, (edl.width, edl.height))
+        times, masks, reports = refined_canvas_masks(sampled, (edl.width, edl.height))
         analysis = analyze_clip(source, src_start, src_end)
-        return SubjectData(times=times, masks=masks, face=analysis.face if analysis else None, analysis=analysis)
+        return SubjectData(
+            times=times, masks=masks, face=analysis.face if analysis else None, analysis=analysis, matte=reports,
+        )
 
     return load
 
@@ -428,6 +433,9 @@ def _plan_slot(
     mean_iou, worst_iou = mask_stability(subject.masks)
     stable = mean_iou >= preset.occlusion.min_mask_stability and worst_iou >= preset.occlusion.min_worst_stability
     gate["mask_stability"] = _gate(stable, f"mean IoU {mean_iou:.3f}, worst {worst_iou:.3f}")
+    if subject.matte:
+        matte_ok, matte_detail = assess_matte(subject.matte, preset.matte)
+        gate["matte_integrity"] = _gate(matte_ok, matte_detail)
     presence = float(np.mean([m.mean() for m in subject.masks]))
     gate["subject_present"] = _gate(presence >= preset.occlusion.min_subject_frac, f"{presence:.3f}")
 

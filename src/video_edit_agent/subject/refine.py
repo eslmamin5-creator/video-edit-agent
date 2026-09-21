@@ -1,23 +1,33 @@
 """Deterministic post-processing of subject masks for behind-subject text.
 
-The MediaPipe selfie segmenter returns a soft, slightly blobby mask. Behind a
-big word that softness shows up as a halo around the speaker, islands of
-background in the mask, and edges that breathe from one sampled frame to the
-next. This module cleans the mask in a few fixed steps and nothing else:
+The MediaPipe selfie segmenter returns a soft, blobby mask from a small model
+input. Around a head it is both wide (a soft grey skirt) and, on dark hair
+against a lighter backdrop, short: the crown and the fringe of hair sit below
+the 0.5 line. Text drawn behind the speaker then shows *over* those hair
+pixels, which reads as the head being eaten by the text.
+
+The alpha built here is subject-favouring by construction: every pixel that is
+subject in the ORIGINAL frame must end up opaque, and the edge only ever grows
+outwards a few pixels, never inwards. The steps, all pure numpy/OpenCV with
+fixed parameters (the same masks and frames always give the same alpha, which
+is what lets the placement search, the micro-preview and the final render agree):
 
     1. `to_canvas`          frame the mask exactly like the render frames the
                             footage (scale-to-cover + centre crop);
     2. `stabilize_temporal` a 3-tap weighted average over the neighbouring
                             samples, so an edge does not flicker between them;
-    3. `refine_alpha`       tighten the soft edge with a contrast curve, drop
-                            stray islands and fill small holes, then snap the
-                            edge to the picture's own edges with a guided
-                            filter (hair, collar, shoulders), and pull the edge
-                            in a hair so no background rim survives (the halo).
-
-Every step is pure numpy/OpenCV with fixed parameters: the same masks and
-frames always produce the same alpha, which is what lets the micro-preview and
-the final render agree.
+    3. `refine_matte`
+       a. core              the mask above 0.5, stray islands dropped, small
+                            holes filled (connected-component clean-up);
+       b. colour evidence   inside a bounded band around the core, pixels that
+                            differ from the local backdrop colour AND connect to
+                            the core are subject (hair, fringe, an ear the model
+                            missed). The backdrop is estimated from the pixels
+                            outside the band, so a uniform backdrop yields no
+                            growth and there is no halo;
+       c. outward feather   a short Gaussian feather that can only add alpha
+                            (`max(feathered, hard)`): the subject never gets
+                            softer, or thinner, than its own core.
 """
 from __future__ import annotations
 
@@ -27,22 +37,52 @@ from dataclasses import dataclass
 
 import numpy as np
 
-REFINE_VERSION = "r1"  # bump when the maths changes: it keys the cutout cache
+REFINE_VERSION = "r2"  # bump when the maths changes: it keys the cutout cache
 
 
 @dataclass(frozen=True)
 class RefineParams:
-    edge_lo: float = 0.30  # soft mask values below this become background ...
-    edge_hi: float = 0.70  # ... and above this become subject; the ramp between is the feather
+    core_threshold: float = 0.5  # mask values above this are subject for certain
+    ramp: float = 0.15  # a soft ramp below the threshold that keeps the model's own confidence
     island_frac: float = 0.003  # subject islands smaller than this share of the frame are dropped
     hole_frac: float = 0.002  # background holes smaller than this share are filled
-    guide_radius: int = 6  # guided-filter window (px at canvas size)
-    guide_eps: float = 2e-3
-    pull_in: float = 0.05  # alpha below this is zeroed and the rest re-stretched (kills the rim)
+    band_frac: float = 0.012  # of the frame height: how far hair may be missing from the core
+    gap_frac: float = 0.003  # of the frame height: skipped between the band and the backdrop samples
+    backdrop_sigma_frac: float = 0.010  # of the frame height: backdrop colour smoothing
+    evidence_lo: float = 70.0  # colour distance (0..441 RGB) from the backdrop: below is backdrop ...
+    evidence_hi: float = 120.0  # ... above is subject; the ramp between is the feather
+    feather_frac: float = 0.0008  # of the frame height: outward Gaussian feather sigma
     temporal_weights: tuple[float, float, float] = (0.25, 0.5, 0.25)
+
+    def band_px(self, height: int) -> int:
+        return max(2, round(self.band_frac * height))
+
+    def feather_sigma(self, height: int) -> float:
+        return max(0.8, self.feather_frac * height)
 
 
 DEFAULT_PARAMS = RefineParams()
+
+
+@dataclass(frozen=True)
+class MatteReport:
+    """What `refine_matte` did to one mask (areas in pixels)."""
+
+    core_area: int
+    added_area: int  # subject pixels found by colour evidence, beyond the core
+    evidence_pixels: int  # band pixels that looked like subject (before the connectivity test)
+    soft_area: int  # pixels of the RAW mask in the uncertain 0.15..0.85 range
+    band_px: int
+    feather_sigma: float
+    evidence_used: bool
+
+    @property
+    def added_frac(self) -> float:
+        return self.added_area / self.core_area if self.core_area else 0.0
+
+    @property
+    def soft_frac(self) -> float:
+        return self.soft_area / self.core_area if self.core_area else 1.0
 
 
 def to_canvas(mask: np.ndarray, size: tuple[int, int]) -> np.ndarray:
@@ -107,45 +147,91 @@ def _clean_regions(binary: np.ndarray, params: RefineParams) -> tuple[np.ndarray
     return keep, fill
 
 
-def _guided_filter(guide: np.ndarray, src: np.ndarray, radius: int, eps: float) -> np.ndarray:
+def _ellipse(radius: int) -> np.ndarray:
     import cv2
 
-    size = (2 * radius + 1, 2 * radius + 1)
+    return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
 
-    def box(x: np.ndarray) -> np.ndarray:
-        return cv2.boxFilter(x, -1, size, borderType=cv2.BORDER_REPLICATE)
 
-    mean_i, mean_p = box(guide), box(src)
-    cov_ip = box(guide * src) - mean_i * mean_p
-    var_i = box(guide * guide) - mean_i * mean_i
-    a = cov_ip / (var_i + eps)
-    b = mean_p - a * mean_i
-    return box(a) * guide + box(b)
+def _backdrop_distance(rgb: np.ndarray, sample: np.ndarray, sigma: float) -> tuple[np.ndarray, np.ndarray]:
+    """(colour distance of every pixel from the smoothed backdrop, whether that
+    backdrop estimate is defined there). `sample` marks the pixels the backdrop
+    is read from; the estimate is a normalised blur of just those pixels."""
+    import cv2
+
+    weight = sample.astype(np.float32)
+    img = rgb.astype(np.float32)
+    num = cv2.GaussianBlur(img * weight[..., None], (0, 0), sigma)
+    den = cv2.GaussianBlur(weight, (0, 0), sigma)
+    known = den > 1e-3
+    backdrop = num / np.maximum(den, 1e-3)[..., None]
+    dist = np.sqrt(((img - backdrop) ** 2).sum(axis=2))
+    return dist, known
+
+
+def refine_matte(
+    mask: np.ndarray, guide_rgb: np.ndarray | None = None, params: RefineParams = DEFAULT_PARAMS,
+) -> tuple[np.ndarray, MatteReport]:
+    """(alpha float32 0..1, report). `guide_rgb` is the frame the mask belongs to
+    (uint8 HxWx3, same size); without it the alpha is the cleaned core with a soft
+    edge and no colour evidence."""
+    import cv2
+
+    m = np.clip(mask.astype(np.float32, copy=False), 0.0, 1.0)
+    height = m.shape[0]
+    raw_soft = int(np.count_nonzero((m > 0.15) & (m < 0.85)))
+    core_bin = (m > params.core_threshold).astype(np.uint8)
+    keep, fill = _clean_regions(core_bin, params)
+    if keep.any():
+        core = ((keep > 0) | (fill > 0)).astype(np.uint8)
+    else:
+        core = core_bin
+    core_area = int(core.sum())
+
+    # the model's own confidence just below the threshold stays as a soft skirt (never > core)
+    lo = params.core_threshold - params.ramp
+    soft = _smoothstep(np.clip((m - lo) / max(params.ramp, 1e-6), 0.0, 1.0))
+    soft = np.where(core > 0, 1.0, soft)
+    # ... but only next to the core (an island's skirt is dropped with the island)
+    near = cv2.dilate(core, _ellipse(max(1, params.band_px(height) // 4)))
+    hard = np.where(near > 0, soft, 0.0).astype(np.float32)
+
+    band_px = params.band_px(height)
+    added = 0
+    evidence_pixels = 0
+    used = False
+    if guide_rgb is not None and guide_rgb.shape[:2] == m.shape and core_area > 0:
+        band = cv2.dilate(core, _ellipse(band_px))
+        excluded = cv2.dilate(core, _ellipse(band_px + max(1, round(params.gap_frac * height))))
+        dist, known = _backdrop_distance(guide_rgb, excluded == 0, max(2.0, params.backdrop_sigma_frac * height))
+        evidence = _smoothstep(np.clip(
+            (dist - params.evidence_lo) / max(params.evidence_hi - params.evidence_lo, 1e-6), 0.0, 1.0,
+        ))
+        evidence = np.where((band > 0) & known, evidence, 0.0).astype(np.float32)
+        candidate = ((evidence > 0.5) | (core > 0)).astype(np.uint8)
+        _, labels = cv2.connectedComponents(candidate, connectivity=8)
+        touching = np.unique(labels[core > 0])
+        connected = np.isin(labels, touching[touching > 0])
+        evidence = np.where(connected, evidence, 0.0).astype(np.float32)
+        evidence_pixels = int(np.count_nonzero(evidence > 0.5))
+        hard = np.maximum(hard, evidence)
+        added = int(np.count_nonzero((hard > 0.5) & (core == 0)))
+        used = True
+
+    sigma = params.feather_sigma(height)
+    feathered = cv2.GaussianBlur(hard, (0, 0), sigma)
+    alpha = np.clip(np.maximum(feathered, hard), 0.0, 1.0).astype(np.float32)
+    return alpha, MatteReport(
+        core_area=core_area, added_area=added, evidence_pixels=evidence_pixels, soft_area=raw_soft,
+        band_px=band_px, feather_sigma=float(sigma), evidence_used=used,
+    )
 
 
 def refine_alpha(
     mask: np.ndarray, guide_rgb: np.ndarray | None = None, params: RefineParams = DEFAULT_PARAMS,
 ) -> np.ndarray:
-    """Cleaned alpha (float32, 0..1, same shape as `mask`). `guide_rgb` is the
-    frame the mask belongs to (uint8 HxWx3, same size); without it the edge is
-    tightened and cleaned but not snapped to the picture."""
-    import cv2
-
-    m = np.clip(mask.astype(np.float32, copy=False), 0.0, 1.0)
-    m = _smoothstep(np.clip((m - params.edge_lo) / (params.edge_hi - params.edge_lo), 0.0, 1.0))
-    binary = (m > 0.5).astype(np.uint8)
-    keep, fill = _clean_regions(binary, params)
-    if keep.any():
-        # stray islands go (with their feathered rim), small holes are filled
-        rim = cv2.dilate((binary & (1 - keep)).astype(np.uint8), np.ones((5, 5), np.uint8))
-        m = np.where(rim > 0, 0.0, m)
-        m = np.where(fill > 0, 1.0, m)
-    if guide_rgb is not None and guide_rgb.shape[:2] == m.shape:
-        gray = cv2.cvtColor(guide_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
-        m = np.clip(_guided_filter(gray, m, params.guide_radius, params.guide_eps), 0.0, 1.0)
-    if params.pull_in > 0:
-        m = np.clip((m - params.pull_in) / (1.0 - params.pull_in), 0.0, 1.0)
-    return m.astype(np.float32)
+    """Cleaned, hair-safe alpha (float32, 0..1, same shape as `mask`); see `refine_matte`."""
+    return refine_matte(mask, guide_rgb, params)[0]
 
 
 def mask_stability(masks: Sequence[np.ndarray]) -> tuple[float, float]:

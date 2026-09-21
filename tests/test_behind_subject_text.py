@@ -439,7 +439,7 @@ def test_the_probe_still_is_split_back_into_one_layer_per_word():
 _SRC = Path(pipeline_mod.__file__).parents[1]
 GENERIC = [
     "motion/behind_subject.py", "motion/occlusion.py", "motion/phrase_timing.py", "motion/glyph_probe.py",
-    "subject/refine.py", "subject/compositor.py",
+    "subject/refine.py", "subject/compositor.py", "subject/integrity.py",
     "motion/remotion/template/src/components/BehindText.tsx",
 ]
 FORBIDDEN = [
