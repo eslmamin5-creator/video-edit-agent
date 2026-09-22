@@ -55,11 +55,11 @@ class CompositionPolicy(BaseModel):
     top_safe: float = 0.12  # the headline stays below this fraction of the frame height
     head_gap: float = 0.02  # min clear space between the headline and the head/hair
     hair_over_face: float = 0.35  # head top ~ face top - this x face height, when no head/hair mask bound is measured
-    move_s: float = 0.9
-    return_s: float = 0.9
+    move_s: float = 0.70
+    return_s: float = 0.65
     text_in_lead_s: float = 0.15  # the headline starts fading in this long before its first word
     text_in_s: float = 0.35
-    text_hold_after_s: float = 0.35  # held this long after the phrase ends
+    text_hold_after_s: float = 1.05  # held this long after the phrase ends: a readable hold, not just the spoken-word span
     text_out_s: float = 0.30
     min_phrase_score: float = 0.5
     max_words: int = 3
