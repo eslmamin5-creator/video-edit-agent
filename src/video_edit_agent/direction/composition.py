@@ -35,6 +35,7 @@ from video_edit_agent.render.reframe import face_frame
 
 TREATMENT = "lower_subject_semantic"
 NOT_SUITABLE = "not_suitable_for_this_window"
+NOT_SUITABLE_NO_QUALIFIED_HEADLINE = "not_suitable_no_qualified_headline"
 _SENTENCE = ".!?؟…"
 _CLAUSE = ",،؛;:"
 _PUNCT = _SENTENCE + _CLAUSE + "\"'«»()[]-–—"
@@ -168,6 +169,14 @@ class HeadlineChoice(BaseModel):
     semantic_kind: str | None = None
     semantic_confidence: float | None = None
     semantic_source: str = "automatic"
+    # Phase 1.3.3: semantic ROLE qualification, computed ahead of (and dominating) the rarity/length scoring above.
+    role: str | None = None  # concept | claim | payoff | keyword | instruction | connector | discourse | filler | uncertain
+    role_confidence: float | None = None
+    concept_strength: float | None = None
+    standalone_meaning: float | None = None
+    semantic_importance: float | None = None
+    headline_eligible: bool = False
+    reason_codes: list[str] = Field(default_factory=list)
 
 
 def timeline_words(transcript: Transcript, edl: EDL) -> list[TWord]:
@@ -202,6 +211,149 @@ def _word_frequency(words: Sequence[TWord]) -> Counter[str]:
     return Counter(_bare(w.text) for w in words if _bare(w.text))
 
 
+# --------------------------------------------------------------------------
+# Phase 1.3.3: semantic ROLE qualification, ahead of and dominating the rarity/length scoring below.
+#
+# Rarity, compact length, content density and clause position (Phase 1.3.2) are useful SECONDARY signals only:
+# they must never make a phrase headline-worthy on their own. A candidate qualifies as a primary headline
+# (`concept`/`claim`/`payoff`/`keyword`) only when it carries a meaningful idea outside pure sentence scaffolding;
+# `instruction`/`connector`/`discourse`/`filler` are excluded from automatic selection by default (sec. 1).
+#
+# Nothing here is a language list or a hardcoded phrase: every signal is measured from the transcript itself
+# (word rarity/density already computed for the scoring pass, plus the candidate's own clause structure) or, when
+# available, an existing project semantic-beat hint (`hints`: (start, end, kind, confidence) — see
+# `direction.semantic_beats`). No model call is made or required: the model hint is OPTIONAL evidence the caller
+# may already have computed offline; when absent the structural baseline alone decides, and when the signal is
+# genuinely ambiguous the candidate fails closed (`uncertain`, not eligible) rather than guessing. A hint that is
+# PRESENT but doesn't corroborate the candidate (an unmapped kind, or below the confidence floor) is treated as
+# weak negative evidence, not as "no hint": it raises the structural bar to a full-clause match before promotion,
+# since rarity/density alone cannot otherwise tell a compact instruction from a compact concept.
+# --------------------------------------------------------------------------
+
+ELIGIBLE_HEADLINE_ROLES = frozenset({"concept", "claim", "payoff", "keyword"})
+INELIGIBLE_HEADLINE_ROLES = frozenset({"instruction", "connector", "discourse", "filler"})
+_MIN_ROLE_CONFIDENCE = 0.4
+
+# an existing project semantic-beat kind (optional evidence, never required) maps to a first guess at the role;
+# `None` means the kind itself is not informative enough to decide the role on its own (falls through to structure).
+_HINT_ROLE: dict[str, str | None] = {
+    "key_claim": "claim",
+    "payoff": "payoff",
+    "process_list": "instruction",
+    "contrast": "claim",
+    "topic_shift": "connector",
+    "question": "discourse",
+    "support": None,
+}
+
+
+@dataclass(frozen=True)
+class _Qualification:
+    role: str
+    role_confidence: float
+    concept_strength: float
+    standalone_meaning: float
+    semantic_importance: float
+    headline_eligible: bool
+    reason_codes: tuple[str, ...]
+
+
+def _rarity_avg(bare_words: Sequence[str], freq: Counter[str], max_freq: int) -> float:
+    if not bare_words:
+        return 0.0
+    return sum(1.0 - freq.get(w, 0) / max_freq for w in bare_words) / len(bare_words)
+
+
+def _content_density(bare_words: Sequence[str], stopwords: frozenset[str]) -> float:
+    if not bare_words:
+        return 0.0
+    return sum(1 for w in bare_words if len(w) >= 3 and w not in stopwords) / len(bare_words)
+
+
+def _clause_bounds(lo_idx: int, hi_idx: int, all_words: Sequence[TWord]) -> tuple[int, int]:
+    """The [lo, hi] index range (inclusive) of the sentence/clause containing `all_words[lo_idx:hi_idx + 1]`."""
+    lo = lo_idx
+    while lo > 0 and all_words[lo - 1].text.rstrip()[-1:] not in _SENTENCE + _CLAUSE:
+        lo -= 1
+    hi = hi_idx
+    while hi < len(all_words) - 1 and all_words[hi].text.rstrip()[-1:] not in _SENTENCE + _CLAUSE:
+        hi += 1
+    return lo, hi
+
+
+def _qualify_role(
+    run_bare: Sequence[str],
+    remainder_bare: Sequence[str] | None,
+    freq: Counter[str],
+    max_freq: int,
+    stopwords: frozenset[str],
+    hint: tuple[str, float] | None,
+) -> _Qualification:
+    """Classifies ONE candidate's semantic role from its own words and the words around it in the SAME clause
+    (sec. 6: context, not isolation). Conservative by construction: an ambiguous case becomes `uncertain`
+    (not eligible) rather than a guessed headline (sec. 4)."""
+    run_rarity, run_density = _rarity_avg(run_bare, freq, max_freq), _content_density(run_bare, stopwords)
+    concept_strength = round(0.5 * run_rarity + 0.5 * run_density, 3)
+    if run_density == 0.0:  # low-information spoken scaffolding: nothing here carries an idea
+        return _Qualification("filler", 0.75, concept_strength, 0.0, 0.0, False, ("no_content_words",))
+
+    if not remainder_bare:
+        standalone_meaning, standalone_why = 1.0, "matches_full_clause"
+    else:
+        rem_rarity, rem_density = _rarity_avg(remainder_bare, freq, max_freq), _content_density(remainder_bare, stopwords)
+        if rem_density == 0.0:
+            standalone_meaning, standalone_why = 0.8, "remainder_is_scaffolding_only"
+        elif rem_rarity > run_rarity + 0.15 or rem_density > run_density + 0.25:
+            # the rest of the clause carries more of the actual concept: this candidate is likely a lead-in
+            # (a generic verb without its object) rather than the idea itself.
+            standalone_meaning, standalone_why = 0.2, "remainder_more_content_bearing"
+        elif rem_rarity < run_rarity - 0.15 or run_density >= rem_density:
+            standalone_meaning, standalone_why = 0.7, "run_carries_more_weight_than_remainder"
+        else:
+            standalone_meaning, standalone_why = 0.45, "ambiguous_relative_to_remainder"
+
+    reasons = [standalone_why]
+    if hint is not None:
+        kind, conf = hint
+        mapped = _HINT_ROLE.get(kind)
+        if mapped is not None and conf >= 0.35:
+            role, role_confidence = mapped, round(min(1.0, 0.4 + 0.5 * conf), 3)
+            reasons.append(f"semantic_hint_{kind}")
+            if role not in ELIGIBLE_HEADLINE_ROLES and standalone_meaning >= 0.85 and concept_strength >= 0.5:
+                role, role_confidence = "concept", max(role_confidence, 0.55)
+                reasons.append("upgraded_full_clause_content_dense")
+            elif role in ELIGIBLE_HEADLINE_ROLES and standalone_meaning <= 0.3:
+                role, role_confidence = "instruction", min(role_confidence, 0.35)
+                reasons.append("downgraded_low_standalone_meaning")
+            eligible = role in ELIGIBLE_HEADLINE_ROLES and role_confidence >= _MIN_ROLE_CONFIDENCE
+            importance = round((role_confidence + concept_strength + standalone_meaning) / 3, 3)
+            return _Qualification(role, role_confidence, concept_strength, standalone_meaning, importance, eligible, tuple(reasons))
+
+    # no (usable) model/semantic-beat hint: the language-neutral structural baseline decides alone. Rarity/density/
+    # position (sec. 2) alone cannot tell a genuine concept from a compact instruction ("check first" scores the
+    # same way as "true value") — a hint that is PRESENT but says nothing positive (an unmapped kind like `support`,
+    # or below the confidence floor) is itself evidence that nothing in this stretch reads as a confident claim/
+    # payoff, so promotion requires the strongest structural signal (the whole clause, not just "more than the
+    # remainder") rather than the same threshold used with no evidence at all (sec. 4: fail closed when uncertain).
+    weak_beat_evidence = hint is not None  # a hint existed but didn't map to a role above / was below confidence
+    if standalone_meaning >= 0.65 and not (weak_beat_evidence and standalone_meaning < 0.85):
+        role = "concept" if len(run_bare) > 1 else "keyword"
+        role_confidence = 0.5 if standalone_meaning >= 0.9 else 0.45
+        reasons.append("structural_standalone_content_bearing")
+    elif standalone_meaning >= 0.65:
+        role, role_confidence = "uncertain", 0.3
+        reasons.append("weak_beat_support_insufficient_for_promotion")
+    elif standalone_meaning <= 0.3:
+        role, role_confidence = "instruction", 0.45
+        reasons.append("structural_low_standalone_meaning")
+    else:
+        role, role_confidence = "uncertain", 0.3  # genuinely unclear: fail closed, never forced into a headline
+        reasons.append("uncertain_semantics_no_strong_signal")
+    eligible = role in ELIGIBLE_HEADLINE_ROLES and role_confidence >= _MIN_ROLE_CONFIDENCE
+    importance = round((role_confidence + concept_strength + standalone_meaning) / 3, 3)
+    return _Qualification(role, role_confidence, concept_strength, standalone_meaning, importance, eligible, tuple(reasons))
+
+
 def select_headline(
     words: Sequence[TWord],
     window: tuple[float, float],
@@ -210,23 +362,32 @@ def select_headline(
     hints: Sequence[tuple[float, float, str, float]] = (),
     policy: CompositionPolicy | None = None,
     pinned_phrase: str | None = None,
+    diagnostics: dict | None = None,
 ) -> HeadlineChoice | None:
     """The best short verbatim phrase inside `window`, or None when nothing is worth a headline.
 
-    Ranks by SEMANTIC USEFULNESS, not merely brevity: a phrase that starts a clause reads as a headline, two short
-    content words is the natural size, function words at the edges are penalised, a semantic hint (start, end, kind,
-    confidence) covering it raises the score, and — the key generic signal for "concept vs. discourse filler" — a
+    Phase 1.3.3: a candidate is qualified for a semantic ROLE first (`_qualify_role`, sec. 1-6) — only
+    `concept`/`claim`/`payoff`/`keyword` are eligible as a primary headline by default; `instruction`/`connector`/
+    `discourse`/`filler` are excluded from automatic selection no matter how they score below. `pinned_phrase`
+    (the user's own choice) is exempt from the eligibility filter but is still qualified and scored, never rewritten.
+
+    Ranks the ELIGIBLE candidates by SEMANTIC USEFULNESS, not merely brevity: a phrase that starts a clause reads as
+    a headline, two short content words is the natural size, function words at the edges are penalised, a semantic
+    hint (start, end, kind, confidence) covering it raises the score, and — a secondary, generic signal only — a
     phrase built from words that are RARE across the whole approved transcript outranks one built from words that
-    recur constantly (connectors, instruction verbs, discourse setup tend to repeat; a specific claim or keyword
-    usually does not). Nothing here is a language list or a hardcoded phrase: rarity is counted from the transcript
-    itself. `pinned_phrase` (the user's own choice) must still be verbatim; it is scored, never rewritten."""
+    recur constantly. Nothing here is a language list or a hardcoded phrase: rarity is counted from the transcript
+    itself. `diagnostics`, when given a dict, is filled with `blocked_by_qualification`: True when a candidate would
+    have scored well enough under the old ranking alone but every such candidate was excluded by role eligibility
+    (distinct from there being no usable phrase in the window at all)."""
     pol = policy or CompositionPolicy()
     span = [w for w in words if window[0] - 1e-6 <= w.start and w.end <= window[1] + 1e-6]
     if pinned_phrase and not is_verbatim(pinned_phrase, span):
         return None
     freq = _word_frequency(words)
     max_freq = max(freq.values(), default=1)
+    pos = {id(w): i for i, w in enumerate(words)}
     best: HeadlineChoice | None = None
+    best_unfiltered: HeadlineChoice | None = None
     limit = min(pol.max_words, MAX_PHRASE_WORDS)
     for i in range(len(span)):
         for n in range(1, limit + 1):
@@ -274,13 +435,32 @@ def select_headline(
             chars = len(text.replace(" ", ""))
             if 4 <= chars <= 26:
                 score, why = score + 0.05, [*why, "a readable standalone length"]
+            # Phase 1.3.3: qualify the semantic role from this candidate's own clause (context, not isolation)
+            # BEFORE it is allowed to compete on the score above (sec. 1-2, 6).
+            lo_idx, hi_idx = pos[id(run[0])], pos[id(run[-1])]
+            c_lo, c_hi = _clause_bounds(lo_idx, hi_idx, words)
+            remainder_bare = [_bare(w.text) for w in (*words[c_lo:lo_idx], *words[hi_idx + 1:c_hi + 1]) if _bare(w.text)]
+            qual = _qualify_role(bare_words, remainder_bare, freq, max_freq, stopwords, hint)
             cand = HeadlineChoice(text=text, start=run[0].start, end=run[-1].end, score=round(score, 3), words=bare_words,
                                   reasons=why, semantic_kind=hint[0] if hint else None, semantic_confidence=hint[1] if hint else None,
-                                  semantic_source="user_pinned" if pinned_phrase else "automatic")
+                                  semantic_source="user_pinned" if pinned_phrase else "automatic",
+                                  role=qual.role, role_confidence=qual.role_confidence, concept_strength=qual.concept_strength,
+                                  standalone_meaning=qual.standalone_meaning, semantic_importance=qual.semantic_importance,
+                                  headline_eligible=qual.headline_eligible, reason_codes=list(qual.reason_codes))
+            if best_unfiltered is None or (cand.score, -cand.start) > (best_unfiltered.score, -best_unfiltered.start):
+                best_unfiltered = cand
+            if not pinned_phrase and not cand.headline_eligible:
+                continue  # sec. 1: instruction/connector/discourse/filler never compete for an automatic headline
             if best is None or (cand.score, -cand.start) > (best.score, -best.start):
                 best = cand
     if best is None or (best.score < pol.min_phrase_score and not pinned_phrase):
+        if diagnostics is not None:
+            diagnostics["blocked_by_qualification"] = bool(
+                best_unfiltered is not None and best_unfiltered.score >= pol.min_phrase_score and not best_unfiltered.headline_eligible
+            )
         return None
+    if diagnostics is not None:
+        diagnostics["blocked_by_qualification"] = False
     return best
 
 
@@ -370,13 +550,24 @@ def compose_lower_subject(
     pol, rp = policy or CompositionPolicy(), rhythm_policy or RhythmPolicy()
     out = LowerSubjectComposition(start=window[0], end=window[1])
 
-    def refuse(why: str) -> LowerSubjectComposition:
-        out.status, out.reason = NOT_SUITABLE, why
-        out.technical_status, out.visual_status, out.rows, out.changes = "not_applicable", "not_suitable", [], []
+    def refuse(why: str, *, status: str = NOT_SUITABLE) -> LowerSubjectComposition:
+        visual = "not_suitable" if status == NOT_SUITABLE else status
+        out.status, out.reason = status, why
+        out.technical_status, out.visual_status, out.rows, out.changes = "not_applicable", visual, [], []
         return out
 
-    choice = select_headline(words, window, stopwords=stopwords, hints=hints, policy=pol, pinned_phrase=pinned_phrase)
+    diag: dict = {}
+    choice = select_headline(words, window, stopwords=stopwords, hints=hints, policy=pol, pinned_phrase=pinned_phrase, diagnostics=diag)
     if choice is None:
+        if diag.get("blocked_by_qualification"):
+            # sec. 8/11: a candidate scored well, but its semantic role (instruction/connector/discourse/filler) is
+            # not eligible as a primary headline by default. Do NOT schedule lower_subject_semantic; the visual
+            # rhythm engine is free to use a safe camera-only treatment instead (slow_push/pull, reframe, hold...).
+            return refuse(
+                "no candidate in this window qualifies as a primary headline (concept/claim/payoff/keyword); "
+                "the best-scoring phrase is only instruction/connector/discourse/filler and is not promoted automatically",
+                status=NOT_SUITABLE_NO_QUALIFIED_HEADLINE,
+            )
         return refuse("no short verbatim phrase in this window is worth a headline (nothing is invented or rewritten)")
     if not is_verbatim(choice.text, words):  # belt and braces: a phrase that is not in the transcript never gets through
         return refuse("the phrase is not verbatim in the approved transcript")
@@ -412,14 +603,17 @@ def compose_lower_subject(
 def review_state(c: LowerSubjectComposition) -> dict[str, str]:
     """The fields the review shows. A candidate is never approved here."""
     return {
-        "treatment": c.treatment if c.status == "ok" else NOT_SUITABLE, "primary_visual": c.primary_visual if c.status == "ok" else "speaker",
+        "treatment": c.treatment if c.status == "ok" else c.status, "primary_visual": c.primary_visual if c.status == "ok" else "speaker",
         "semantic_source": c.semantic_source, "technical_status": c.technical_status, "visual_status": c.visual_status,
         "approval_status": c.approval_status, "caption_role": c.hierarchy.caption_role if c.status == "ok" else "normal",
     }
 
 
 __all__ = [
+    "ELIGIBLE_HEADLINE_ROLES",
+    "INELIGIBLE_HEADLINE_ROLES",
     "NOT_SUITABLE",
+    "NOT_SUITABLE_NO_QUALIFIED_HEADLINE",
     "TREATMENT",
     "CompositionPolicy",
     "HeadlineChoice",
