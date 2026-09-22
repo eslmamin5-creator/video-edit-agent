@@ -63,6 +63,7 @@ class CompositionPolicy(BaseModel):
     text_out_s: float = 0.30
     min_phrase_score: float = 0.5
     max_words: int = 3
+    conflict_guard_s: float = 2.5  # Phase 1.3.4: min spacing a global candidate needs from another major treatment
 
 
 class LowerSubjectGeometry(BaseModel):
@@ -354,41 +355,25 @@ def _qualify_role(
     return _Qualification(role, role_confidence, concept_strength, standalone_meaning, importance, eligible, tuple(reasons))
 
 
-def select_headline(
+def _candidates(
     words: Sequence[TWord],
     window: tuple[float, float],
     *,
-    stopwords: frozenset[str] = frozenset(),
-    hints: Sequence[tuple[float, float, str, float]] = (),
-    policy: CompositionPolicy | None = None,
-    pinned_phrase: str | None = None,
-    diagnostics: dict | None = None,
-) -> HeadlineChoice | None:
-    """The best short verbatim phrase inside `window`, or None when nothing is worth a headline.
-
-    Phase 1.3.3: a candidate is qualified for a semantic ROLE first (`_qualify_role`, sec. 1-6) — only
-    `concept`/`claim`/`payoff`/`keyword` are eligible as a primary headline by default; `instruction`/`connector`/
-    `discourse`/`filler` are excluded from automatic selection no matter how they score below. `pinned_phrase`
-    (the user's own choice) is exempt from the eligibility filter but is still qualified and scored, never rewritten.
-
-    Ranks the ELIGIBLE candidates by SEMANTIC USEFULNESS, not merely brevity: a phrase that starts a clause reads as
-    a headline, two short content words is the natural size, function words at the edges are penalised, a semantic
-    hint (start, end, kind, confidence) covering it raises the score, and — a secondary, generic signal only — a
-    phrase built from words that are RARE across the whole approved transcript outranks one built from words that
-    recur constantly. Nothing here is a language list or a hardcoded phrase: rarity is counted from the transcript
-    itself. `diagnostics`, when given a dict, is filled with `blocked_by_qualification`: True when a candidate would
-    have scored well enough under the old ranking alone but every such candidate was excluded by role eligibility
-    (distinct from there being no usable phrase in the window at all)."""
-    pol = policy or CompositionPolicy()
+    stopwords: frozenset[str],
+    hints: Sequence[tuple[float, float, str, float]],
+    policy: CompositionPolicy,
+    pinned_phrase: str | None,
+) -> list[HeadlineChoice]:
+    """Every candidate span inside `window` (Phase 1.3.4: `window` may be the WHOLE approved transcript, not just a
+    pre-chosen local slot — nothing here assumes a small span), qualified and scored, ELIGIBLE or not. Shared by
+    `select_headline` (best-in-window, sec. 1-6 of Phase 1.3.3) and `discover_global_candidates` (best-in-video,
+    Phase 1.3.4 sec. 1-3): the scoring/qualification logic itself never changes with the size of `window`."""
     span = [w for w in words if window[0] - 1e-6 <= w.start and w.end <= window[1] + 1e-6]
-    if pinned_phrase and not is_verbatim(pinned_phrase, span):
-        return None
     freq = _word_frequency(words)
     max_freq = max(freq.values(), default=1)
     pos = {id(w): i for i, w in enumerate(words)}
-    best: HeadlineChoice | None = None
-    best_unfiltered: HeadlineChoice | None = None
-    limit = min(pol.max_words, MAX_PHRASE_WORDS)
+    limit = min(policy.max_words, MAX_PHRASE_WORDS)
+    out: list[HeadlineChoice] = []
     for i in range(len(span)):
         for n in range(1, limit + 1):
             run = span[i:i + n]
@@ -447,12 +432,48 @@ def select_headline(
                                   role=qual.role, role_confidence=qual.role_confidence, concept_strength=qual.concept_strength,
                                   standalone_meaning=qual.standalone_meaning, semantic_importance=qual.semantic_importance,
                                   headline_eligible=qual.headline_eligible, reason_codes=list(qual.reason_codes))
-            if best_unfiltered is None or (cand.score, -cand.start) > (best_unfiltered.score, -best_unfiltered.start):
-                best_unfiltered = cand
-            if not pinned_phrase and not cand.headline_eligible:
-                continue  # sec. 1: instruction/connector/discourse/filler never compete for an automatic headline
-            if best is None or (cand.score, -cand.start) > (best.score, -best.start):
-                best = cand
+            out.append(cand)
+    return out
+
+
+def select_headline(
+    words: Sequence[TWord],
+    window: tuple[float, float],
+    *,
+    stopwords: frozenset[str] = frozenset(),
+    hints: Sequence[tuple[float, float, str, float]] = (),
+    policy: CompositionPolicy | None = None,
+    pinned_phrase: str | None = None,
+    diagnostics: dict | None = None,
+) -> HeadlineChoice | None:
+    """The best short verbatim phrase inside `window`, or None when nothing is worth a headline.
+
+    Phase 1.3.3: a candidate is qualified for a semantic ROLE first (`_qualify_role`, sec. 1-6) — only
+    `concept`/`claim`/`payoff`/`keyword` are eligible as a primary headline by default; `instruction`/`connector`/
+    `discourse`/`filler` are excluded from automatic selection no matter how they score below. `pinned_phrase`
+    (the user's own choice) is exempt from the eligibility filter but is still qualified and scored, never rewritten.
+
+    Ranks the ELIGIBLE candidates by SEMANTIC USEFULNESS, not merely brevity: a phrase that starts a clause reads as
+    a headline, two short content words is the natural size, function words at the edges are penalised, a semantic
+    hint (start, end, kind, confidence) covering it raises the score, and — a secondary, generic signal only — a
+    phrase built from words that are RARE across the whole approved transcript outranks one built from words that
+    recur constantly. Nothing here is a language list or a hardcoded phrase: rarity is counted from the transcript
+    itself. `diagnostics`, when given a dict, is filled with `blocked_by_qualification`: True when a candidate would
+    have scored well enough under the old ranking alone but every such candidate was excluded by role eligibility
+    (distinct from there being no usable phrase in the window at all)."""
+    pol = policy or CompositionPolicy()
+    span = [w for w in words if window[0] - 1e-6 <= w.start and w.end <= window[1] + 1e-6]
+    if pinned_phrase and not is_verbatim(pinned_phrase, span):
+        return None
+    best: HeadlineChoice | None = None
+    best_unfiltered: HeadlineChoice | None = None
+    for cand in _candidates(words, window, stopwords=stopwords, hints=hints, policy=pol, pinned_phrase=pinned_phrase):
+        if best_unfiltered is None or (cand.score, -cand.start) > (best_unfiltered.score, -best_unfiltered.start):
+            best_unfiltered = cand
+        if not pinned_phrase and not cand.headline_eligible:
+            continue  # sec. 1: instruction/connector/discourse/filler never compete for an automatic headline
+        if best is None or (cand.score, -cand.start) > (best.score, -best.start):
+            best = cand
     if best is None or (best.score < pol.min_phrase_score and not pinned_phrase):
         if diagnostics is not None:
             diagnostics["blocked_by_qualification"] = bool(
@@ -462,6 +483,74 @@ def select_headline(
     if diagnostics is not None:
         diagnostics["blocked_by_qualification"] = False
     return best
+
+
+# --------------------------------------------------------------------------
+# Phase 1.3.4: global candidate discovery — search the WHOLE approved transcript instead of one pre-chosen window,
+# rank Top-N BEFORE any geometry is computed, and only THEN spend targeted segmentation on those few windows
+# (sec. 1). Nothing below performs segmentation itself: geometry stays the caller's job, unchanged from
+# `compose_lower_subject`, so a global search never implies a full-video segmentation pass.
+# --------------------------------------------------------------------------
+
+
+class GlobalCandidate(BaseModel):
+    """One globally-ranked, semantically-qualified headline candidate, BEFORE geometry is checked."""
+
+    text: str
+    start: float
+    end: float
+    role: str | None = None
+    role_confidence: float | None = None
+    concept_strength: float | None = None
+    standalone_meaning: float | None = None
+    semantic_importance: float | None = None
+    local_score: float = 0.0
+    global_score: float = 0.0
+    conflict: bool = False
+    conflict_reason: str = ""
+    choice: HeadlineChoice
+
+
+def discover_global_candidates(
+    words: Sequence[TWord],
+    *,
+    stopwords: frozenset[str] = frozenset(),
+    hints: Sequence[tuple[float, float, str, float]] = (),
+    policy: CompositionPolicy | None = None,
+    existing_treatments: Sequence[tuple[float, float, str]] = (),
+    top_n: int = 5,
+) -> list[GlobalCandidate]:
+    """Sec. 1-3: search every clause in the approved transcript for a QUALIFIED (concept/claim/payoff/keyword)
+    headline candidate — never limited to windows that happen to already have subject-geometry cached — rank
+    them globally, and return the Top-N. `existing_treatments` (start, end, treatment name) is generic, caller-
+    supplied context (an approved/pending edit-plan slot, e.g. the Behind-Subject slot) used only to flag/penalise
+    a time conflict (sec. 6); nothing here is project- or language-specific, and no segmentation happens here."""
+    if not words:
+        return []
+    pol = policy or CompositionPolicy()
+    window = (words[0].start, words[-1].end)
+    cands = [c for c in _candidates(words, window, stopwords=stopwords, hints=hints, policy=pol, pinned_phrase=None)
+             if c.headline_eligible and c.score >= pol.min_phrase_score]
+    cands.sort(key=lambda c: (-c.score, c.start))
+    picked: list[GlobalCandidate] = []
+    diversity_gap = max(pol.conflict_guard_s, 0.05)  # Top-N must span genuinely different moments, not near-duplicate
+    for c in cands:                                  # variants of the same clause (e.g. "check first"/"first check")
+        if any(not (c.end + diversity_gap <= p.start or c.start - diversity_gap >= p.end) for p in picked):
+            continue  # keep the Top-N diverse: never two overlapping-or-adjacent spans from the same clause
+        conflict, reason = False, ""
+        for t0, t1, name in existing_treatments:
+            if c.start - pol.conflict_guard_s < t1 and t0 < c.end + pol.conflict_guard_s:
+                conflict, reason = True, f"overlaps or is too close to the existing '{name}' treatment ({t0:.2f}-{t1:.2f}s)"
+                break
+        global_score = round(c.score + 0.5 * (c.semantic_importance or 0.0) - (0.4 if conflict else 0.0), 3)
+        picked.append(GlobalCandidate(text=c.text, start=c.start, end=c.end, role=c.role, role_confidence=c.role_confidence,
+                                      concept_strength=c.concept_strength, standalone_meaning=c.standalone_meaning,
+                                      semantic_importance=c.semantic_importance, local_score=c.score, global_score=global_score,
+                                      conflict=conflict, conflict_reason=reason, choice=c))
+        if len(picked) >= top_n:
+            break
+    picked.sort(key=lambda g: (-g.global_score, g.start))
+    return picked
 
 
 # --------------------------------------------------------------------------
@@ -609,6 +698,27 @@ def review_state(c: LowerSubjectComposition) -> dict[str, str]:
     }
 
 
+def rank_verified_candidates(
+    verified: Sequence[tuple[GlobalCandidate, LowerSubjectComposition]],
+) -> tuple[GlobalCandidate, LowerSubjectComposition] | None:
+    """Phase 1.3.4 sec. 7-8, sec. 11 test 10: the FINAL winner among candidates that already passed targeted
+    geometry — not simply the highest pre-geometry `global_score`, but that score adjusted by how comfortably the
+    geometry actually fits (a candidate that only barely clears `min_gain` loses to a close rival that lands
+    comfortably inside the preferred gain band with generous headline/head clearance). Only `status == "ok"` and
+    non-conflicting pairs compete; returns None (Outcome C) when nothing survives."""
+    best: tuple[GlobalCandidate, LowerSubjectComposition] | None = None
+    best_key: tuple[float, float] | None = None
+    for cand, comp in verified:
+        if comp.status != "ok" or cand.conflict:
+            continue
+        clearance = comp.geometry.headline_to_head_clearance if comp.geometry is not None else 0.0
+        feasibility = (0.15 if (comp.geometry is not None and comp.geometry.preferred_gain_met) else 0.0) + min(max(clearance, 0.0), 0.2)
+        key = (round(cand.global_score + feasibility, 3), -cand.start)
+        if best_key is None or key > best_key:
+            best_key, best = key, (cand, comp)
+    return best
+
+
 __all__ = [
     "ELIGIBLE_HEADLINE_ROLES",
     "INELIGIBLE_HEADLINE_ROLES",
@@ -616,13 +726,16 @@ __all__ = [
     "NOT_SUITABLE_NO_QUALIFIED_HEADLINE",
     "TREATMENT",
     "CompositionPolicy",
+    "GlobalCandidate",
     "HeadlineChoice",
     "LowerSubjectComposition",
     "LowerSubjectGeometry",
     "TWord",
     "compose_lower_subject",
+    "discover_global_candidates",
     "hierarchy",
     "is_verbatim",
+    "rank_verified_candidates",
     "review_state",
     "select_headline",
     "solve_lower_subject",
