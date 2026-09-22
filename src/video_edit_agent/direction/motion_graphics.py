@@ -27,6 +27,8 @@ automatically discovered candidate.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -36,6 +38,7 @@ from video_edit_agent.direction.composition import (
     ELIGIBLE_HEADLINE_ROLES,
     CompositionPolicy,
     TWord,
+    _bare,
     discover_global_candidates,
     select_headline,
 )
@@ -45,6 +48,19 @@ from video_edit_agent.direction.semantic_beats import SemanticKind, detect_seman
 MAX_DIAGRAM_NODES = 5
 MIN_DIAGRAM_NODES = 2
 _LIST_SEP_CHARS = ",،"  # comma, Arabic comma (a generic structural cue, not a language list)
+
+# Generic numeral words (English + Arabic), used only as an OPTIONAL supporting signal
+# for framework discovery (sec. 3: "count cue (`five`, `خمس`, etc.) when present") --
+# never a requirement, never a client-specific term.
+_COUNT_WORDS: dict[int, tuple[str, ...]] = {
+    2: ("two", "اثنين", "اثنان"),
+    3: ("three", "ثلاثة", "ثلاث"),
+    4: ("four", "أربعة", "أربع"),
+    5: ("five", "خمسة", "خمس"),
+    6: ("six", "ستة", "ست"),
+    7: ("seven", "سبعة", "سبع"),
+    8: ("eight", "ثمانية", "ثمان"),
+}
 
 
 class TreatmentType(str, Enum):
@@ -218,6 +234,148 @@ def discover_diagram_candidates(
     return out
 
 
+@dataclass(frozen=True)
+class FrameworkMember:
+    """One framework label and where it came from (sec. 4: label, source type,
+    supporting span)."""
+
+    label: str
+    source_type: str  # "transcript" | "approved_canonical"
+    source_span: tuple[float, float] | None = None
+    citation: str | None = None  # only set for "approved_canonical": the caller's own citation of the approval
+
+
+@dataclass(frozen=True)
+class FrameworkSpec:
+    """A caller-supplied, already-approved framework to look for (sec. 3/4). The
+    anchor phrase and member terms are generic DATA a caller passes in -- whatever
+    the reviewed project knowledge says this video's framework actually is -- never
+    a language list or a hardcoded concept baked into this module. `canonical_evidence`
+    maps a member term (case-insensitive) to a citation string for when that member is
+    already-approved project knowledge but is not itself a verbatim transcript span."""
+
+    anchor: str
+    member_terms: tuple[str, ...]
+    canonical_evidence: dict[str, str] = dc_field(default_factory=dict)
+    min_members: int = MIN_DIAGRAM_NODES
+
+
+def _find_term_span(term: str, words: Sequence[TWord]) -> tuple[float, float] | None:
+    """The verbatim transcript span of `term`: an exact contiguous run of words for a
+    multi-word term (sec. 8.7/8.8: not limited to one clause or comma/ordinal cues --
+    this searches the WHOLE word sequence given to it), or a case-insensitive substring
+    match against a single token for a one-word term (covers a term that arrived glued
+    to an Arabic prefix, e.g. an attached definite article, as one ASR/correction token).
+    `None` when the term does not appear at all: sec. 3 -- never invent a location."""
+    parts = [p for p in term.split() if p]
+    if not parts:
+        return None
+    want = [_bare(p).casefold() for p in parts]
+    have = [_bare(w.text).casefold() for w in words]
+    if len(want) == 1:
+        target = want[0]
+        for w, bare in zip(words, have, strict=True):
+            if target and target in bare:
+                return w.start, w.end
+        return None
+    n = len(want)
+    for i in range(len(have) - n + 1):
+        if have[i:i + n] == want:
+            return words[i].start, words[i + n - 1].end
+    return None
+
+
+def _has_count_cue(words: Sequence[TWord], count: int) -> bool:
+    """Whether the transcript says the framework's own member count out loud (sec. 3's
+    generic, optional "count cue" signal) -- informational only, never required."""
+    cues = _COUNT_WORDS.get(count, ())
+    if not cues:
+        return False
+    have = {_bare(w.text).casefold() for w in words}
+    return any(c in have for c in cues)
+
+
+def _find_member_evidence(
+    term: str, words: Sequence[TWord], *, stopwords: frozenset[str], policy: CompositionPolicy,
+) -> FrameworkMember | None:
+    """`term`'s transcript evidence: found verbatim AND independently re-qualified
+    through the existing `select_headline` eligibility gate (sec. 1 -- no new rule).
+    A term that is found but does not qualify, or is not found at all, yields nothing
+    here (the caller may still accept it via `canonical_evidence`; sec. 4/11)."""
+    span = _find_term_span(term, words)
+    if span is None:
+        return None
+    choice = select_headline(words, span, stopwords=stopwords, policy=policy)
+    if choice is None or not choice.headline_eligible:
+        return None
+    return FrameworkMember(label=choice.text, source_type="transcript", source_span=(round(span[0], 3), round(span[1], 3)))
+
+
+def discover_framework_candidates(
+    transcript: Transcript,
+    words: Sequence[TWord],
+    frameworks: Sequence[FrameworkSpec],
+    *,
+    stopwords: frozenset[str] = frozenset(),
+    policy: CompositionPolicy | None = None,
+    existing_treatments: Sequence[tuple[float, float, str]] = (),
+    brand_profile: str = "default",
+    max_nodes: int = MAX_DIAGRAM_NODES,
+) -> list[MotionGraphicCandidate]:
+    """`simple_diagram` candidates for a named FRAMEWORK (sec. 3): a caller-supplied
+    anchor phrase plus member terms, each independently searched for and re-qualified
+    across the WHOLE transcript's words -- not one beat, not same-clause commas or
+    ordinal words (sec. 3's gap in `discover_diagram_candidates`, which only recognises
+    `SemanticKind.PROCESS_LIST`). A member earns a place only when it is a verbatim,
+    independently-qualified transcript span, or when the caller's own
+    `FrameworkSpec.canonical_evidence` already cites it as approved project knowledge
+    (sec. 4); nothing is invented or hallucinated. Fewer than `spec.min_members`
+    supportable members drops that framework entirely -- fail closed, no partial
+    diagram (sec. 4/8.10)."""
+    pol = policy or CompositionPolicy()
+    out: list[MotionGraphicCandidate] = []
+    for spec in frameworks:
+        members: list[FrameworkMember] = []
+        spans: list[tuple[float, float]] = []
+        canonical_lookup = {k.casefold(): v for k, v in spec.canonical_evidence.items()}
+        for term in spec.member_terms:
+            member = _find_member_evidence(term, words, stopwords=stopwords, policy=pol)
+            if member is None:
+                citation = canonical_lookup.get(term.casefold())
+                if citation is not None:
+                    member = FrameworkMember(label=term, source_type="approved_canonical", citation=citation)
+            if member is not None:
+                members.append(member)
+                if member.source_span is not None:
+                    spans.append(member.source_span)
+            if len(members) >= max_nodes:
+                break
+        if len(members) < spec.min_members:
+            continue  # fail closed: not enough supportable members for this framework at all
+        start = min((s[0] for s in spans), default=0.0)
+        end = max((s[1] for s in spans), default=0.0)
+        conflict, reason = _conflicts(start, end, existing_treatments, pol.conflict_guard_s)
+        evidence = [
+            {
+                "label": m.label, "source_type": m.source_type,
+                "source_span": list(m.source_span) if m.source_span else None,
+                **({"citation": m.citation} if m.citation else {}),
+            }
+            for m in members
+        ]
+        out.append(MotionGraphicCandidate(
+            treatment_type=TreatmentType.SIMPLE_DIAGRAM.value, semantic_role="concept",
+            labels=[m.label for m in members], start=start, end=end, brand_profile=brand_profile,
+            global_score=round(len(members) / max(len(spec.member_terms), 1), 3),
+            conflict=conflict, conflict_reason=reason,
+            layout={
+                "nodes": len(members), "placement": "overlay_zone", "anchor": spec.anchor, "evidence": evidence,
+                "count_cue": _has_count_cue(words, len(spec.member_terms)),
+            },
+        ))
+    return out
+
+
 def select_treatments(
     candidates: Sequence[MotionGraphicCandidate],
     *,
@@ -255,9 +413,12 @@ __all__ = [
     "ELIGIBLE_HEADLINE_ROLES",
     "MAX_DIAGRAM_NODES",
     "MIN_DIAGRAM_NODES",
+    "FrameworkMember",
+    "FrameworkSpec",
     "MotionGraphicCandidate",
     "TreatmentType",
     "discover_diagram_candidates",
+    "discover_framework_candidates",
     "discover_headline_candidates",
     "discover_keyword_candidates",
     "select_treatments",
