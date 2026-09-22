@@ -14,6 +14,7 @@ here. Nothing in this module is brand- or project-specific.
 """
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
@@ -195,6 +196,12 @@ def is_verbatim(phrase: str, words: Sequence[TWord]) -> bool:
     return n > 0 and any(have[i:i + n] == want for i in range(len(have) - n + 1))
 
 
+def _word_frequency(words: Sequence[TWord]) -> Counter[str]:
+    """How often each bare word form recurs across the WHOLE approved transcript. A generic, data-driven stand-in for
+    "is this a specific concept or a common connector/filler": no language list, no hardcoded phrase, just counting."""
+    return Counter(_bare(w.text) for w in words if _bare(w.text))
+
+
 def select_headline(
     words: Sequence[TWord],
     window: tuple[float, float],
@@ -206,14 +213,19 @@ def select_headline(
 ) -> HeadlineChoice | None:
     """The best short verbatim phrase inside `window`, or None when nothing is worth a headline.
 
-    Generic signals only (no language list beyond the caller's `stopwords`): a phrase that starts a clause reads as a
-    headline, two short content words is the natural size, function words at the edges are penalised, and a
-    semantic hint (start, end, kind, confidence) covering it raises the score. `pinned_phrase` (the user's own choice) must
-    still be verbatim; it is scored, never rewritten."""
+    Ranks by SEMANTIC USEFULNESS, not merely brevity: a phrase that starts a clause reads as a headline, two short
+    content words is the natural size, function words at the edges are penalised, a semantic hint (start, end, kind,
+    confidence) covering it raises the score, and — the key generic signal for "concept vs. discourse filler" — a
+    phrase built from words that are RARE across the whole approved transcript outranks one built from words that
+    recur constantly (connectors, instruction verbs, discourse setup tend to repeat; a specific claim or keyword
+    usually does not). Nothing here is a language list or a hardcoded phrase: rarity is counted from the transcript
+    itself. `pinned_phrase` (the user's own choice) must still be verbatim; it is scored, never rewritten."""
     pol = policy or CompositionPolicy()
     span = [w for w in words if window[0] - 1e-6 <= w.start and w.end <= window[1] + 1e-6]
     if pinned_phrase and not is_verbatim(pinned_phrase, span):
         return None
+    freq = _word_frequency(words)
+    max_freq = max(freq.values(), default=1)
     best: HeadlineChoice | None = None
     limit = min(pol.max_words, MAX_PHRASE_WORDS)
     for i in range(len(span)):
@@ -236,7 +248,8 @@ def select_headline(
                 score, why = score + 0.2, [*why, "two words: a natural headline size"]
             elif n == 1:
                 score += 0.1
-            edges = (_bare(run[0].text), _bare(run[-1].text))
+            bare_words = [_bare(w.text) for w in run]
+            edges = (bare_words[0], bare_words[-1])
             if all(len(e) >= 3 and e not in stopwords for e in edges):
                 score, why = score + 0.2, [*why, "content words at both edges"]
             dur = run[-1].end - run[0].start
@@ -245,7 +258,23 @@ def select_headline(
             hint = next(((k, c) for a, b, k, c in hints if a - 0.3 <= run[0].start and run[-1].end <= b + 0.3), None)
             if hint is not None:
                 score, why = score + 0.15 * hint[1], [*why, f"semantic hint {hint[0]} ({hint[1]:.2f})"]
-            cand = HeadlineChoice(text=text, start=run[0].start, end=run[-1].end, score=round(score, 3), words=[_bare(w.text) for w in run],
+            # Semantic usefulness (Phase 1.3.2): concept-bearing and understandable out of context outranks
+            # discourse setup / instruction filler / connectors, using only signals measured from this transcript.
+            rarity = sum(1.0 - freq.get(w, 0) / max_freq for w in bare_words) / max(len(bare_words), 1)
+            if rarity > 0:
+                score += 0.30 * rarity
+                if rarity >= 0.6:
+                    why = [*why, f"a specific concept, rare in the transcript (rarity {rarity:.2f})"]
+            content = sum(1 for w in bare_words if len(w) >= 3 and w not in stopwords)
+            density = content / max(len(bare_words), 1)
+            if density == 1.0 and len(bare_words) > 1:
+                score, why = score + 0.15, [*why, "every word carries content: reads as a compact idea"]
+            elif density > 0:
+                score += 0.15 * density
+            chars = len(text.replace(" ", ""))
+            if 4 <= chars <= 26:
+                score, why = score + 0.05, [*why, "a readable standalone length"]
+            cand = HeadlineChoice(text=text, start=run[0].start, end=run[-1].end, score=round(score, 3), words=bare_words,
                                   reasons=why, semantic_kind=hint[0] if hint else None, semantic_confidence=hint[1] if hint else None,
                                   semantic_source="user_pinned" if pinned_phrase else "automatic")
             if best is None or (cand.score, -cand.start) > (best.score, -best.start):

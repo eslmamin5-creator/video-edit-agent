@@ -51,15 +51,29 @@ class OcclusionPolicy:
     # meaningful occlusion (Phase 1.3.1): the subject must really be IN FRONT of glyph bodies, not just touch them
     edge_erode_frac: float = 0.02  # of the font size: the glyph core drops the antialiased fringe and thin strokes' edges
     subject_erode_px: int = 2  # the subject core drops the matte fringe and a one-pixel hair contact
-    min_overlap_ratio: float = 0.06  # core glyph px behind the subject / core glyph px
-    min_occluded_glyphs: int = 2  # glyph units (connected ink shapes) that are meaningfully behind the subject
+    min_overlap_ratio: float = 0.06  # core glyph px behind the subject / core glyph px (a SOFT scoring target, not a cutoff)
+    min_occluded_glyphs: int = 2  # glyph units (connected ink shapes) that are meaningfully behind the subject (soft target)
     min_glyph_overlap: float = 0.20  # a glyph unit counts as occluded when this share of its core is behind the subject
-    min_overlap_rows: float = 0.20  # the overlap must reach this share of the ink's height (not a sliver along one edge)
-    min_visible_ratio: float = 0.70  # share of the glyph ink that stays visible
-    min_visible_per_word: float = 0.50  # every word keeps at least this much visible
+    min_overlap_rows: float = 0.20  # the overlap must reach this share of the ink's height (soft target, not a sliver rule)
+    min_visible_ratio: float = 0.70  # share of the glyph ink that stays visible (soft target)
+    min_visible_per_word: float = 0.50  # soft target: every word keeps at least this much visible
     require_meaningful: bool = True  # Behind-Subject needs the subject truly in front of glyph bodies (off only for legacy checks)
     composition_sizes: int = 3  # font sizes tried per layout in the composition search (largest ... smallest)
     composition_overlaps: tuple[float, ...] = (0.20, 0.25, 0.30, 0.45, 0.60, 0.80)  # share of the text height put inside the silhouette top
+    # Phase 1.3.2 perceptual gate: overlap ratio is one signal among several, never the sole cutoff (see `meaningful_occlusion`).
+    # These stay HARD fails — no perceptual score can rescue them:
+    min_overlap_px_hard: int = 12  # below this an "overlap" is edge noise, not a real glyph-body/subject contact
+    min_visible_ratio_hard: float = 0.55  # below this the text is simply unreadable, whatever the rest of the score says
+    min_visible_per_word_hard: float = 0.35  # a single word this hidden makes the phrase unreadable regardless of score
+    # Everything else is soft evidence folded into a weighted, explainable composite score:
+    perceptual_word_touch_frac: float = 0.02  # a word counts as "meaningfully touched" above this core-overlap share
+    perceptual_min_score: float = 0.55  # the composite score must clear this to pass once no hard fail applies
+    perceptual_weight_overlap: float = 0.15  # raw glyph-body overlap ratio vs. the soft target
+    perceptual_weight_glyphs: float = 0.20  # occluded glyph units vs. the soft target count
+    perceptual_weight_words: float = 0.15  # share of words meaningfully touched
+    perceptual_weight_location: float = 0.15  # vertical extent of the overlap (a sliver vs. a real band)
+    perceptual_weight_visibility: float = 0.20  # overall readability margin above the hard floor
+    perceptual_weight_depth: float = 0.15  # how much of the WHOLE glyph structure engages: central/structural vs. fringe
 
 
 DEFAULT_POLICY = OcclusionPolicy()
@@ -82,6 +96,10 @@ class MeaningfulOcclusion:
     overlap_on_torso_frac: float  # ... on the shoulders/torso (below it)
     passed: bool
     reasons: tuple[str, ...] = ()
+    # Phase 1.3.2 perceptual gate diagnostics
+    perceptual_score: float = 0.0
+    hard_fail: str = ""  # non-empty names the hard-fail rule that rejected this candidate outright (score is irrelevant then)
+    components: dict = field(default_factory=dict)  # each weighted component's normalized [0,1] contribution, for explainability
 
     def summary(self) -> dict:
         return {
@@ -90,7 +108,8 @@ class MeaningfulOcclusion:
             "occluded_glyph_count": self.occluded_glyph_count, "total_glyph_count": self.total_glyph_count,
             "word_overlap_ratio": [round(v, 3) for v in self.word_overlap_ratio], "overlap_rows_frac": round(self.overlap_rows_frac, 3),
             "overlap_on_head_frac": round(self.overlap_on_head_frac, 3), "overlap_on_torso_frac": round(self.overlap_on_torso_frac, 3),
-            "passed": self.passed, "reasons": list(self.reasons),
+            "passed": self.passed, "reasons": list(self.reasons), "perceptual_score": round(self.perceptual_score, 4),
+            "hard_fail": self.hard_fail, "components": dict(self.components),
         }
 
 
@@ -151,21 +170,65 @@ def meaningful_occlusion(
         else:  # the sample with the LEAST occlusion decides whether it is meaningful; the LEAST visible decides readability
             worst = (cand if cand[0] < worst[0] else worst)[:5] + (min(visible, worst[5]),) + (cand if cand[0] < worst[0] else worst)[6:]
     ratio, n_over, occluded, rows, words, visible, head = worst or (0.0, 0, 0, 0.0, tuple(0.0 for _ in alphas), 1.0, 0.0)
+    total_glyph_count = len(units)
+
+    # --- Hard fails (Phase 1.3.2): these reject outright, whatever the perceptual score says. ---------------------
+    hard_fail = ""
+    if n_over == 0:
+        hard_fail = "no_actual_overlap"
+    elif n_over < pol.min_overlap_px_hard or occluded == 0:
+        hard_fail = "fringe_only_contact"
+    elif visible < pol.min_visible_ratio_hard or any(1.0 - v < pol.min_visible_per_word_hard for v in words):
+        hard_fail = "text_unreadable"
+
+    # --- Soft evidence -> a single explainable, deterministic composite score. ---------------------------------
+    # No component alone controls the outcome: a low raw overlap ratio can still pass when the other signals
+    # (occluded glyph/word count, vertical reach, visibility margin, structural depth) are strong.
+    overlap_component = min(ratio / max(pol.min_overlap_ratio, 1e-6), 1.0)
+    glyph_component = min(occluded / max(pol.min_occluded_glyphs, 1), 1.0)
+    touched_words = sum(1 for v in words if v >= pol.perceptual_word_touch_frac)
+    word_component = touched_words / max(len(words), 1)
+    location_quality = min(rows / max(pol.min_overlap_rows, 1e-6), 1.0)
+    visibility_component = min(visible / max(pol.min_visible_ratio, 1e-6), 1.0)
+    depth_clarity = min(occluded / max(total_glyph_count, 1), 1.0)  # how much of the WHOLE glyph structure engages
+    score = (
+        pol.perceptual_weight_overlap * overlap_component
+        + pol.perceptual_weight_glyphs * glyph_component
+        + pol.perceptual_weight_words * word_component
+        + pol.perceptual_weight_location * location_quality
+        + pol.perceptual_weight_visibility * visibility_component
+        + pol.perceptual_weight_depth * depth_clarity
+    )
+    components = {
+        "overlap": round(overlap_component, 4), "glyphs": round(glyph_component, 4), "words": round(word_component, 4),
+        "location": round(location_quality, 4), "visibility": round(visibility_component, 4), "depth": round(depth_clarity, 4),
+    }
+
     reasons: list[str] = []
-    if ratio < pol.min_overlap_ratio:
-        reasons.append(f"only {ratio * 100:.1f}% of the glyph bodies are behind the subject (need {pol.min_overlap_ratio * 100:.0f}%)")
-    if occluded < pol.min_occluded_glyphs:
-        reasons.append(f"{occluded} glyph(s) are meaningfully occluded (need {pol.min_occluded_glyphs})")
-    if rows < pol.min_overlap_rows:
-        reasons.append(f"the overlap reaches only {rows * 100:.0f}% of the text height: a sliver on one edge")
-    if visible < pol.min_visible_ratio:
-        reasons.append(f"only {visible * 100:.0f}% of the text stays visible (need {pol.min_visible_ratio * 100:.0f}%)")
-    if any(1.0 - v < pol.min_visible_per_word for v in words):
-        reasons.append("a word is mostly hidden")
+    if hard_fail == "no_actual_overlap":
+        reasons.append("no actual glyph-body overlap: the subject never reaches the text's ink")
+    elif hard_fail == "fringe_only_contact":
+        reasons.append(
+            f"only {n_over}px of contact ({ratio * 100:.1f}% of the core, {occluded} glyph(s) meaningfully occluded): "
+            "edge/antialiasing fringe, not a real body overlap"
+        )
+    elif hard_fail == "text_unreadable":
+        if visible < pol.min_visible_ratio_hard:
+            reasons.append(f"only {visible * 100:.0f}% of the text stays visible (need {pol.min_visible_ratio_hard * 100:.0f}%)")
+        if any(1.0 - v < pol.min_visible_per_word_hard for v in words):
+            reasons.append("a word is mostly hidden")
+    passed = not hard_fail and score >= pol.perceptual_min_score
+    if not hard_fail and not passed:
+        weakest = sorted(components.items(), key=lambda kv: kv[1])[:2]
+        reasons.append(
+            f"perceptual occlusion score {score:.2f} is below the pass threshold {pol.perceptual_min_score:.2f} "
+            f"(weakest signals: {', '.join(f'{k} {v:.2f}' for k, v in weakest)})"
+        )
     return MeaningfulOcclusion(
         text_total_px=total, text_subject_overlap_px=n_over, text_subject_overlap_ratio=ratio, visible_text_ratio=visible,
-        occluded_glyph_count=occluded, total_glyph_count=len(units), word_overlap_ratio=words, overlap_rows_frac=rows,
-        overlap_on_head_frac=head, overlap_on_torso_frac=1.0 - head if n_over else 0.0, passed=not reasons, reasons=tuple(reasons),
+        occluded_glyph_count=occluded, total_glyph_count=total_glyph_count, word_overlap_ratio=words, overlap_rows_frac=rows,
+        overlap_on_head_frac=head, overlap_on_torso_frac=1.0 - head if n_over else 0.0, passed=passed, reasons=tuple(reasons),
+        perceptual_score=round(score, 4), hard_fail=hard_fail, components=components,
     )
 
 

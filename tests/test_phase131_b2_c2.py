@@ -319,8 +319,9 @@ def test_15_behind_subject_passes_only_with_meaningful_overlap_and_readability()
     (p,) = _plans(load=_body(), preset=PASSING)
     mo = p.metrics["meaningful_occlusion"]
     assert p.decision == bs.DECISION_BEHIND and p.technical_status == "passed" and p.gate["meaningful_occlusion"]["passed"]
-    assert mo["passed"] and mo["occluded_glyph_count"] >= 2 and mo["visible_text_ratio"] >= occ.OcclusionPolicy().min_visible_ratio
-    assert mo["text_subject_overlap_ratio"] >= occ.OcclusionPolicy().min_overlap_ratio
+    # Phase 1.3.2: occluded-glyph count is soft evidence feeding the perceptual score, not a standalone >= 2 hard rule.
+    assert mo["passed"] and mo["occluded_glyph_count"] >= 1 and mo["visible_text_ratio"] >= occ.OcclusionPolicy().min_visible_ratio_hard
+    assert mo["perceptual_score"] >= occ.OcclusionPolicy().perceptual_min_score and not mo["hard_fail"]
     # the same shot under the default limits (a key word may hide at most a fifth) leaves no candidate that is meaningful AND readable
     (strict,) = _plans(load=_body(), preset=bs.TreatmentPreset())
     assert strict.decision != bs.DECISION_BEHIND and strict.technical_status == "failed_meaningful_occlusion"
