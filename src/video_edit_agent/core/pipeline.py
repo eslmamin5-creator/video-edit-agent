@@ -299,11 +299,26 @@ def run_pipeline(
     profile = parse_profile(cfg.profile)
     approved_slot_statuses = {"approved", "changed", "generation_approved"}
     existing_plan = load_plan(review_dir)
+    existing_slots = existing_plan.slots if existing_plan else []
     behind_subject_windows = [
         (s.timeline_start, s.timeline_end)
-        for s in (existing_plan.slots if existing_plan else [])
+        for s in existing_slots
         if s.treatment == "behind_subject_text" and s.status.value in approved_slot_statuses
     ]
+    # Approved-state integrity (Phase 1.5.1): an explicitly approved lower_subject_semantic
+    # headline in the project's own persisted review state is pinned and re-verified, never
+    # displaced by a freshly auto-discovered candidate. For an existing, previously-reviewed
+    # project with no approved headline this run, auto-discovery must not silently burn an
+    # unreviewed/pending candidate into the render; a genuinely fresh project (no persisted
+    # review state at all) keeps the original auto-discover-and-burn behavior.
+    approved_headline_slot = next(
+        (s for s in existing_slots if s.treatment == "lower_subject_semantic" and s.status.value in approved_slot_statuses and s.text), None,
+    )
+    pinned_headline = (
+        (approved_headline_slot.text, approved_headline_slot.timeline_start, approved_headline_slot.timeline_end)
+        if approved_headline_slot else None
+    )
+    allow_auto_headline_discovery = existing_plan is None or not existing_slots or pinned_headline is not None
     headline_font_px = 88
     # Reuses the real, already-tested filler-word sets from editorial false-start
     # detection, plus the closed grammatical class of Arabic interrogative pronouns
@@ -317,7 +332,8 @@ def run_pipeline(
     rhythm_result = plan_and_apply_visual_rhythm(
         transcript, edl, profile=profile, face_box=footage.face if footage else None,
         headline_font_px=headline_font_px, behind_subject_windows=behind_subject_windows,
-        stopwords=headline_stopwords,
+        stopwords=headline_stopwords, pinned_headline=pinned_headline,
+        allow_auto_headline_discovery=allow_auto_headline_discovery,
     )
 
     from video_edit_agent.editorial.edl import save as save_edl

@@ -158,6 +158,8 @@ def discover_and_verify_headline(
     existing_treatments: Sequence[tuple[float, float, str]] = (),
     stopwords: frozenset[str] = frozenset(),
     duration: float | None = None,
+    pinned: tuple[str, float, float] | None = None,
+    allow_auto_discovery: bool = True,
 ) -> HeadlineWiring:
     """Reuses the real, generic, already-tested Phase 1.3.4/1.3.5 pipeline -- global
     candidate discovery, then targeted geometry verification, then the final
@@ -165,10 +167,33 @@ def discover_and_verify_headline(
     own transcript qualifies for automatically. Fails closed: an empty/too-weak/
     ungeometrically-safe result returns no composition, exactly like a fresh project
     with no strongly qualified beat. Not tied to any particular client: any transcript
-    with a qualifying concept/claim/payoff/keyword beat can produce one."""
+    with a qualifying concept/claim/payoff/keyword beat can produce one.
+
+    `pinned` is an explicitly APPROVED (phrase, start, end) from the project's own
+    persisted review state (spec Phase 1.5.1: approved-state integrity) -- when given,
+    it is verified in place of running discovery, exactly the same technical/geometry
+    gates a discovered candidate would face, and it is never displaced by a fresh
+    auto-discovered candidate. `allow_auto_discovery=False` means this is an existing,
+    previously-reviewed project with no approved headline for this run: fresh
+    auto-discovery must not silently burn an unreviewed candidate into the render
+    (a `pending_review` candidate stays a reviewable candidate only)."""
     if not words or face_box is None:
         return HeadlineWiring()
     comp_policy = CompositionPolicy()
+    if pinned is not None:
+        phrase, start, end = pinned
+        height_fn = _headline_height_fn(headline_font_px, width, height)
+        window = (max(0.0, start - 6.0), end + 10.0 if duration is None else min(duration, end + 10.0))
+        comp = compose_lower_subject(
+            words, window, face_box=face_box, headline_height=height_fn, stopwords=stopwords,
+            policy=comp_policy, rhythm_policy=RhythmPolicy(), pinned_phrase=phrase,
+        )
+        if comp.status != "ok":
+            return HeadlineWiring()
+        comp.semantic_source, comp.approval_status = "user_pinned", "approved"
+        return HeadlineWiring(candidate=None, composition=comp)
+    if not allow_auto_discovery:
+        return HeadlineWiring()
     candidates = discover_global_candidates(
         words, stopwords=stopwords, policy=comp_policy, existing_treatments=existing_treatments, top_n=5,
     )
@@ -209,6 +234,8 @@ def plan_and_apply_visual_rhythm(
     headline_font_px: int,
     behind_subject_windows: Sequence[tuple[float, float]] = (),
     stopwords: frozenset[str] = frozenset(),
+    pinned_headline: tuple[str, float, float] | None = None,
+    allow_auto_headline_discovery: bool = True,
 ) -> VisualRhythmResult:
     """The real production wiring (spec section 3 step 5 / section 1's Visual Rhythm):
     plans the low-semantic camera rhythm for the whole video at the profile's density,
@@ -219,7 +246,16 @@ def plan_and_apply_visual_rhythm(
     uses (`direction.rhythm`, `direction.camera_timeline`), just invoked for the
     actual render instead of only for a reviewable plan. Approved Behind-Subject
     windows are passed through untouched so a rhythm/headline excursion never
-    collides with them (they stay exclusively owned, per their own approval)."""
+    collides with them (they stay exclusively owned, per their own approval).
+
+    `pinned_headline` (phrase, start, end) is an explicitly approved
+    `lower_subject_semantic` treatment from the project's own persisted review state:
+    when present it is used instead of auto-discovery and cannot be displaced by a
+    fresh candidate. `allow_auto_headline_discovery=False` (an existing, previously
+    reviewed project with no approved headline this run) stops a merely
+    `pending_review`/never-reviewed automatic candidate from silently entering the
+    render; a genuinely fresh project (no persisted review state at all) keeps
+    discovering and burning its best qualified candidate as before."""
     end = max([transcript.duration, *[s.end for s in transcript.segments]]) if transcript.segments else 0.0
     words = timeline_words(transcript, edl)
     headline = discover_and_verify_headline(
@@ -227,6 +263,7 @@ def plan_and_apply_visual_rhythm(
         headline_font_px=headline_font_px,
         existing_treatments=[(s, e, "behind_subject_text") for s, e in behind_subject_windows],
         stopwords=stopwords, duration=end,
+        pinned=pinned_headline, allow_auto_discovery=allow_auto_headline_discovery,
     )
     rhythm_policy = RhythmPolicy(energy=camera_energy_for_profile(profile))
     compositions = [headline.composition] if headline.ok else []
