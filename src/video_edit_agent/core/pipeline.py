@@ -37,6 +37,7 @@ from video_edit_agent.direction.production_profile import (
     plan_and_apply_visual_rhythm,
 )
 from video_edit_agent.editorial.edl import validate as validate_edl
+from video_edit_agent.editorial.false_starts import ARABIC_FILLERS, ENGLISH_FILLERS
 from video_edit_agent.editorial.packer import write_takes_packed
 from video_edit_agent.editorial.planner import build_edl
 from video_edit_agent.editorial.punch_in import plan_punch_ins
@@ -304,9 +305,19 @@ def run_pipeline(
         if s.treatment == "behind_subject_text" and s.status.value in approved_slot_statuses
     ]
     headline_font_px = 88
+    # Reuses the real, already-tested filler-word sets from editorial false-start
+    # detection, plus the closed grammatical class of Arabic interrogative pronouns
+    # (never content-bearing on their own, unlike an open-ended vocabulary list), so a
+    # bare discourse/filler/question word can never stand alone as a "content word"
+    # and win a lower_subject_semantic headline slot by default.
+    _ARABIC_INTERROGATIVES = frozenset({
+        "إزاي", "ازاي", "ليه", "فين", "امتى", "إمتى", "مين", "كام", "ماذا", "كيف", "متى", "أين", "لماذا",
+    })
+    headline_stopwords = frozenset(ARABIC_FILLERS) | frozenset(ENGLISH_FILLERS) | _ARABIC_INTERROGATIVES
     rhythm_result = plan_and_apply_visual_rhythm(
         transcript, edl, profile=profile, face_box=footage.face if footage else None,
         headline_font_px=headline_font_px, behind_subject_windows=behind_subject_windows,
+        stopwords=headline_stopwords,
     )
 
     from video_edit_agent.editorial.edl import save as save_edl

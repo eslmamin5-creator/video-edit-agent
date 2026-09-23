@@ -164,6 +164,22 @@ motion graphic, local B-roll, generated B-roll, no treatment), never the default
 - `motion/`, `broll/`, `subject/`, `providers/`, `qa/`, `language/`,
   `localization/`, `cli/` — see their own module docstrings.
 
+## Production defaults (Phase 1.5 freeze)
+
+- **Editing profiles**: `minimal`, `balanced`, `dynamic` — `AppConfig.profile`
+  defaults to `"balanced"`. Profiles only vary event density/eligibility;
+  they never change transcript fidelity, safety/fail-closed behavior,
+  review-first gating, brand rules, or determinism.
+- **Motion Graphics is experimental and off by default.**
+  `AppConfig.motion_graphics_mode` is `"off" | "experimental"`, defaulting to
+  `"off"`. The MG code path and its tests stay in the repo either way —
+  don't delete them when MG is disabled.
+- **Deferred, not implemented as automatic default behavior**: SFX,
+  automatic B-roll generation, generated visuals, speaker replacement, and
+  advanced MG art direction. B-roll *planning* (candidate discovery) can run
+  by default; actual B-roll generation still requires explicit review
+  approval (`review_state.json`'s `broll_generation_approved`).
+
 ## Conventions to follow
 
 - **Never build an ffmpeg command as a shell string.** Always pass an
