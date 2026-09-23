@@ -8,6 +8,7 @@ installed, producing a valid (if visually simpler) final video.
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from video_edit_agent.broll.overlay import broll_items_to_overlays
 from video_edit_agent.broll.planner import plan_broll
 from video_edit_agent.broll.treatment import load_decisions
 from video_edit_agent.captions.brand_style import resolve_brand_caption_style
-from video_edit_agent.captions.engine import caption_chunks, write_captions
+from video_edit_agent.captions.engine import build_ass, caption_chunks, write_captions
 from video_edit_agent.core.config import AppConfig
 from video_edit_agent.core.media import MediaError, content_hash, extract_audio, probe
 from video_edit_agent.core.project import ProjectMemory, ProjectPaths
@@ -29,6 +30,11 @@ from video_edit_agent.core.schemas import (
     QAIssue,
     QAReport,
     Transcript,
+)
+from video_edit_agent.direction.production_profile import (
+    burn_headline_into_captions,
+    parse_profile,
+    plan_and_apply_visual_rhythm,
 )
 from video_edit_agent.editorial.edl import validate as validate_edl
 from video_edit_agent.editorial.packer import write_takes_packed
@@ -284,6 +290,25 @@ def run_pipeline(
         lead_clip.source_file, lead_clip.source_in, min(lead_clip.source_out, lead_clip.source_in + 4.0)
     ) if lead_clip else None
     plan_punch_ins(edl, energy=brand.motion.energy, face_box=footage.face if footage else None)
+
+    # 4.5. Visual Rhythm + lower_subject_semantic headline (Product Freeze, spec
+    # section 1/3): the real camera-timeline wiring, gated only by the user's
+    # editing profile. Approved behind_subject_text slots are passed through so
+    # a rhythm/headline excursion never collides with them.
+    profile = parse_profile(cfg.profile)
+    approved_slot_statuses = {"approved", "changed", "generation_approved"}
+    existing_plan = load_plan(review_dir)
+    behind_subject_windows = [
+        (s.timeline_start, s.timeline_end)
+        for s in (existing_plan.slots if existing_plan else [])
+        if s.treatment == "behind_subject_text" and s.status.value in approved_slot_statuses
+    ]
+    headline_font_px = 88
+    rhythm_result = plan_and_apply_visual_rhythm(
+        transcript, edl, profile=profile, face_box=footage.face if footage else None,
+        headline_font_px=headline_font_px, behind_subject_windows=behind_subject_windows,
+    )
+
     from video_edit_agent.editorial.edl import save as save_edl
 
     save_edl(edl, paths.edl_json)
@@ -297,6 +322,15 @@ def run_pipeline(
     resolved_style = resolve_brand_caption_style(caption_style_name, brand)
     caption_style = resolved_style.style
     write_captions(transcript, edl, caption_style, paths.edit_dir / "captions.ass", paths.master_srt)
+    if rhythm_result.headline.ok:
+        composition = rhythm_result.headline.composition
+        normal_ass = build_ass(transcript, edl, caption_style, safe_zone=None)
+        reduced_style = dataclasses.replace(caption_style, font_size=round(caption_style.font_size * 0.72))
+        reduced_ass = build_ass(transcript, edl, reduced_style, safe_zone=None)
+        merged_ass = burn_headline_into_captions(
+            normal_ass, reduced_ass, composition, caption_style, headline_font_px, edl.width, edl.height,
+        )
+        (paths.edit_dir / "captions.ass").write_text(merged_ass, encoding="utf-8")
 
     # 6. B-roll planning (graceful: never blocks the pipeline)
     broll_items: list[BrollPlanItem] = []

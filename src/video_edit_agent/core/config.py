@@ -62,6 +62,14 @@ class AppConfig(BaseModel):
     editorial: EditorialConfig = Field(default_factory=EditorialConfig)
     offline: bool = False
     brand: str | None = None
+    # Product Freeze (Phase 1.5): user-facing editing profile -- density/eligibility
+    # only, never transcript fidelity, safety, review-first behaviour or brand rules.
+    # One of "minimal" | "balanced" | "dynamic"; "balanced" is the product default.
+    profile: str = "balanced"
+    # Motion Graphics (Phase 1.4 primary_headline_typography / keyword_visual /
+    # simple_diagram) stays experimental and OFF by default for any new project.
+    # One of "off" | "experimental".
+    motion_graphics_mode: str = "off"
 
     # ---- persistence -------------------------------------------------
 
