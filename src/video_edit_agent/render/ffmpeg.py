@@ -9,7 +9,12 @@ from pathlib import Path
 
 from video_edit_agent.core.media import run
 from video_edit_agent.render.composition import RenderPlan, build_filter_complex
-from video_edit_agent.render.export import ExportPreset
+from video_edit_agent.render.export import (
+    ExportPreset,
+    audio_encode_args,
+    video_encode_args,
+    video_filter_tail,
+)
 
 
 class RenderError(RuntimeError):
@@ -20,6 +25,10 @@ def render(plan: RenderPlan, output_path: Path, preset: ExportPreset, *, crf: in
     output_path.parent.mkdir(parents=True, exist_ok=True)
     inputs, filter_complex, map_labels = build_filter_complex(plan)
     v_map, a_map = map_labels.strip("[]").split("][")
+    tail = video_filter_tail(preset)
+    if tail:
+        filter_complex += f";[{v_map}]{tail}[vstd]"
+        v_map = "vstd"
 
     cmd = [
         "ffmpeg", "-y",
@@ -27,9 +36,9 @@ def render(plan: RenderPlan, output_path: Path, preset: ExportPreset, *, crf: in
         "-filter_complex", filter_complex,
         "-map", f"[{v_map}]", "-map", f"[{a_map}]",
         "-r", str(preset.fps),
-        "-c:v", "libx264", "-crf", str(crf), "-preset", "medium",
+        *video_encode_args(preset, crf=crf),
         "-b:v", preset.video_bitrate,
-        "-c:a", "aac", "-b:a", preset.audio_bitrate,
+        *audio_encode_args(preset),
         "-movflags", "+faststart",
         str(output_path),
     ]

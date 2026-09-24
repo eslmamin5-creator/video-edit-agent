@@ -2,9 +2,17 @@
 addable as plain folders with zero core source changes."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from video_edit_agent.brand.loader import BrandNotFoundError, init_brand, load_brand
+from video_edit_agent.brand.loader import (
+    BrandNotFoundError,
+    brands_root,
+    init_brand,
+    load_brand,
+    resolve_logo_path,
+)
 from video_edit_agent.brand.schema import Brand
 from video_edit_agent.brand.validator import validate_brand
 
@@ -71,3 +79,38 @@ def test_validate_brand_warns_on_unknown_caption_preset():
     result = validate_brand(brand)
     assert result.ok  # warning only, not an error
     assert result.warnings
+
+
+def test_resolve_logo_path_finds_dropped_in_image(tmp_path):
+    root = tmp_path / "brands"
+    init_brand("acme", root=root)
+    logo = root / "acme" / "logos" / "logo.png"
+    logo.write_bytes(b"fake-png")
+    assert resolve_logo_path("acme", root=root) == logo
+
+
+def test_resolve_logo_path_ignores_non_image_files(tmp_path):
+    root = tmp_path / "brands"
+    init_brand("acme", root=root)
+    (root / "acme" / "logos" / "README.txt").write_text("drop a logo here")
+    assert resolve_logo_path("acme", root=root) is None
+
+
+def test_resolve_logo_path_returns_none_when_no_logos_dir(tmp_path):
+    root = tmp_path / "brands"
+    assert resolve_logo_path("does_not_exist", root=root) is None
+
+
+def test_resolve_logo_path_returns_none_for_no_brand_name(tmp_path):
+    assert resolve_logo_path(None, root=tmp_path / "brands") is None
+
+
+def test_default_brand_ships_no_placeholder_logo():
+    """Regression test (Review-First Editing Workflow spec section 4): the
+    shipped 'default' brand must not ship any logo asset, placeholder or
+    otherwise -- a real, un-brand-defined yellow circle previously shipped
+    here and was silently composited onto every render using this brand."""
+    assert resolve_logo_path("default", root=brands_root()) is None
+    logos_dir = Path(brands_root()) / "default" / "logos"
+    if logos_dir.is_dir():
+        assert list(logos_dir.iterdir()) == []

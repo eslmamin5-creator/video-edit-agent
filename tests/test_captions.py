@@ -1,6 +1,8 @@
 """Caption timing / RTL / word-highlight tests (spec section 15)."""
 from __future__ import annotations
 
+import re
+
 from video_edit_agent.captions.engine import _remap_words_to_timeline, build_ass, build_srt
 from video_edit_agent.captions.styles import PRESETS, resolve_style
 from video_edit_agent.core.schemas import EDL, EDLClip, Segment, Transcript
@@ -67,7 +69,8 @@ def test_build_ass_word_highlight_style_emits_karaoke_tags():
         EDLClip(source_file="dummy.mp4", source_in=0.0, source_out=1.0, timeline_in=0.0, timeline_out=1.0, caption_refs=["s0"]),
     ])
     ass = build_ass(transcript, edl, PRESETS["word-highlight"])
-    assert "\\k" in ass and "\\kf" in ass
+    assert "\\kf" in ass
+    assert "\\k38\\kf" not in ass and not re.search(r"\\k\d+\\kf", ass)  # one timing tag per word, never a stacked pair
 
 
 def test_build_ass_minimal_style_has_no_karaoke_tags():
@@ -116,3 +119,24 @@ def test_resolve_style_maps_brand_font_field_to_font_ar_and_font_en():
     styled = resolve_style("minimal", {"font": "Cairo"})
     assert styled.font_ar == "Cairo"
     assert styled.font_en == "Cairo"
+
+
+def test_resolve_style_null_brand_overrides_keep_preset_defaults():
+    """A brand.yaml with `primary_color: null` / `highlight_color: null` /
+    `font: null` (e.g. brands/default/brand.yaml) means "use the preset's
+    own color/font", not "set this field to Python None" -- the latter used
+    to overwrite the preset's valid `&HAABBGGRR` color with the literal
+    value None, which then serialized into the ASS Style line as the text
+    "None": an invalid ASS color that made libass silently fail to draw the
+    caption glyphs while the (separately valid) BackColour box still
+    rendered, leaving burned-in captions invisible (Baseline Recovery
+    Milestone item 3 regression, caught only by a visual Layer 2 smoke-render
+    frame inspection, not by any existing unit test)."""
+    styled = resolve_style(
+        "minimal", {"primary_color": None, "highlight_color": None, "font": None},
+    )
+    assert styled.primary_color == PRESETS["minimal"].primary_color
+    assert styled.highlight_color == PRESETS["minimal"].highlight_color
+    assert styled.font_ar == PRESETS["minimal"].font_ar
+    assert "None" not in styled.primary_color
+    assert "None" not in styled.highlight_color

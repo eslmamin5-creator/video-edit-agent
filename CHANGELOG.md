@@ -3,6 +3,37 @@
 All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+## [0.2.3] - 2026-09-24
+
+Baseline recovery: a review-first, Arabic-first editing workflow that works on any video.
+
+### Added
+- `videoedit edit <video>` with a default **Balanced** profile (also Minimal / Dynamic) and a neutral brand fallback.
+- Review-first editing: short previews per treatment, natural-language revisions (Arabic wording is never translated or formalised), approve, undo, remove.
+- Approved-treatment locking: the final render uses exactly what the approved preview showed, or stops with a clear error.
+- Visual Rhythm (subtle camera movement), semantic lower-subject headline and Behind-Subject treatments.
+- Transcript caching and resume: rerunning the same command keeps setup choices and approved locks and shows a short "existing project found" message.
+- Windows-compatible H.264/AAC MP4 export, validated after rendering.
+
+### Experimental / deferred
+- Motion Graphics: experimental, off by default.
+- SFX, automatic B-roll and generated visuals: deferred; not needed for normal operation.
+
+### Known limitations
+- If a final render is interrupted, a partial `edit/final.mp4` may remain until you rerun `videoedit edit <video>`, which safely replaces it and preserves state. Atomic temp-file finalization is planned for a later version.
+
+### Added
+- Chat-first transcript review (`videoedit review-chat`): numbered,
+  timestamped sentences with status and low-confidence words shown in the
+  conversation; natural Arabic/English replies to approve, replace a sentence,
+  replace a word/phrase, hear a segment, page or filter. New segment states
+  (`approved`, `needs_review`, `corrected_pending_approval`, `unresolved`),
+  audio only on demand, and `proposed_copy` so a suggested hook rewrite is never
+  rendered before approval. Approving a transcript segment no longer approves
+  hook copy taken from it.
+
 ## [0.2.2] - 2026-09-15
 
 Arabic-first UX, product onboarding, and user guide only -- Editor / Creator

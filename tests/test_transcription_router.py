@@ -15,9 +15,14 @@ from video_edit_agent.transcription.router import TranscriptionRouter, build_pro
 
 
 @pytest.fixture(autouse=True)
-def no_cloud_keys(monkeypatch):
+def no_cloud_keys(monkeypatch, tmp_path):
+    """Clears OS env keys AND neutralizes the project-`.env` fallback
+    (core.env_file.resolve_secret) by running from an empty tmp directory —
+    otherwise a real `.env` anywhere above the repo root would leak a real
+    key into these "no keys configured" tests."""
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
 
 
 def test_default_priority_ends_with_faster_whisper():

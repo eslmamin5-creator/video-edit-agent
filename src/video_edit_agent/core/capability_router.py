@@ -78,38 +78,46 @@ def detect_gemini_key() -> Capability:
     key = get_gemini_key()
     if not key:
         return Capability("gemini_key", False, "missing GEMINI_API_KEY", verified=None)
+    if not _pymodule("google.genai"):
+        # A key alone doesn't make the provider usable -- e.g. the
+        # "full-local" profile deliberately excludes the "gemini" extra, so
+        # a key saved via `videoedit setup`'s prompt can exist with no SDK
+        # installed in this interpreter. Reporting available=True here would
+        # be a false-ready state that only surfaces later as a runtime
+        # transcription failure.
+        return Capability(
+            "gemini_key", False,
+            "API key set but google-genai not installed (pip install video-edit-agent[gemini])",
+            verified=None,
+        )
     verified, verified_detail = is_verified("gemini_live")
     return Capability("gemini_key", True, f"API key detected; live {verified_detail}", verified=verified)
 
 
 def detect_elevenlabs_key() -> Capability:
     key = get_elevenlabs_key()
-    return Capability("elevenlabs_key", key is not None, "set" if key else "missing ELEVENLABS_API_KEY")
+    if not key:
+        return Capability("elevenlabs_key", False, "missing ELEVENLABS_API_KEY")
+    if not _pymodule("elevenlabs"):
+        return Capability(
+            "elevenlabs_key", False,
+            "API key set but elevenlabs not installed (pip install video-edit-agent[elevenlabs])",
+        )
+    return Capability("elevenlabs_key", True, "set")
 
 
 def detect_hyperframes() -> Capability:
-    """Installed does NOT mean usable: a package literally named "hyperframes"
-    exists on PyPI but is an unrelated N-dimensional DataFrame library with no
-    rendering API (confirmed during V1.1 hardening due-diligence) -- so this
-    checks for the actual `render_from_spec` entry point this project's
-    adapter calls, not just a successful bare import."""
-    installed = _pymodule("hyperframes")
-    has_real_api = False
-    if installed:
-        try:
-            import hyperframes  # type: ignore
-
-            has_real_api = hasattr(hyperframes, "render_from_spec")
-        except ImportError:
-            has_real_api = False
+    """A package literally named "hyperframes" exists on PyPI but is an
+    unrelated N-dimensional DataFrame library with no rendering API -- there
+    is no importable Python SDK for the real `heygen-com/hyperframes` project
+    at all. Its actual integration surface is the published npm CLI
+    (`npx hyperframes@<pinned>`, see `motion/hyperframes/adapter.py`), so
+    detection mirrors `detect_remotion()`: Node.js + npm is what's required,
+    not a Python import."""
+    ok = detect_node().available and detect_npm().available
     verified, verified_detail = is_verified("hyperframes")
-    if not installed:
-        detail = "not installed (optional)"
-    elif not has_real_api:
-        detail = "installed but missing render_from_spec -- not a real HyperFrames SDK"
-    else:
-        detail = f"installed, real API present; {verified_detail}"
-    return Capability("hyperframes", has_real_api, detail, verified=verified if has_real_api else None)
+    detail = (f"renderable via npx; {verified_detail}") if ok else "requires Node.js + npm"
+    return Capability("hyperframes", ok, detail, verified=verified if ok else None)
 
 
 def detect_mediapipe() -> Capability:

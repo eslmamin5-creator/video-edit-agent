@@ -80,6 +80,75 @@ clarifying question rather than guessing. Don't expose internal CLI syntax
 in the answer unless it's actually useful to the user (e.g. they asked a
 technical question, or you're reporting the exact command you ran).
 
+## Transcript review is chat-first
+
+After transcription the user reviews the transcript **in the conversation**,
+never by opening WAV/JSON/ASS files. Flow: transcribe -> show the transcript
+in chat -> the user approves or corrects -> corrections are saved -> continue
+to edit-plan review.
+
+- Run `videoedit review-chat <edit dir> --open` once to start the review
+  (low-confidence segments become `unresolved`), then pass **the user's
+  message as typed** as the second argument for every later turn:
+  `videoedit review-chat <edit dir> "<message>"`. Show the printed text in the
+  chat as-is; there is no command syntax for the user to learn.
+- The user sees 1-based numbers (`[09] 00:32.82-00:34.74`), the current text,
+  a `Status:` line and the `Low-confidence:` words. Never show internal ids
+  such as `s8`. The default view is suspicious-first; the user can ask for
+  all segments, only suspicious ones, a range, specific numbers, next/previous.
+  Long videos are paged (8 per page), never dumped.
+- Understood in Arabic and English: `1 صح` / `approve 1`, `الجملة 5: <text>`,
+  `الجملة 14 كلها المفروض تكون: <text>`, `في الجملة 9 غير كلمة X إلى Y`,
+  `غير service إلى سيرفس`, `اسمعني الجملة 15`, `وريني بس الجمل اللي فيها شك`,
+  `راجعلي 9 و14 و15 بس`, `اعتمد الباقي`.
+- Text the user dictates is stored **verbatim** (never translated, never
+  formalized). A word-level fix that is ambiguous (the word appears twice, or
+  nowhere) is not guessed: the reply asks which one.
+- Segment status: `approved`, `needs_review` (low-confidence, advisory),
+  `corrected_pending_approval`, `unresolved`. A whole-sentence replacement or
+  "N صح" approves that segment; a word/phrase fix leaves it
+  `corrected_pending_approval` until the user says it is right.
+  `unresolved` and `corrected_pending_approval` block `review-approve`.
+- Audio is a fallback, cut **only** when the user asks (`اسمعني الجملة 9`).
+  The reply prints `AUDIO: <path>`; send that file to the user in the
+  conversation (e.g. `SendUserFile`) instead of telling them where it is.
+- Corrections live in `review/transcript_corrections.json` and review state in
+  `review/review_state.json`; the raw `transcript_unified.json` is never
+  modified. Project-specific corrections belong only in that state.
+- **Transcript approval is not hook-copy approval.** Approving a segment does
+  not make it the on-screen hook: hook copy stays `pending_review` until the
+  user approves the exact words (`review-copy`). A rewrite you suggest is
+  recorded as a *proposed rewrite* (`proposed_copy`) and is never rendered
+  until approved. Raw ASR is never used as hook copy.
+
+## Edit-plan / B-roll review is chat-first too
+
+Order: EDIT PLAN -> show the treatments in chat -> the user approves or
+changes -> decisions saved -> only then source/generate assets -> quality gate
+-> final composition. The user must never meet a B-roll or motion decision for
+the first time in a finished render. Generated B-roll is one treatment among
+several (stay on speaker, punch-in, kinetic typography, behind-subject text,
+motion graphic, local B-roll, generated B-roll, no treatment), never the default.
+
+- Decisions come from `review/broll_editorial.json`; `videoedit review-plan
+  <edit dir> --open [--settled TREATMENT=reason]` builds `review/edit_plan.json`
+  (slots already approved elsewhere, e.g. hook or punch-in, are settled and not
+  asked). Then pass the user's message as typed: `videoedit review-plan
+  <edit dir> "<message>"` and show the printed text as-is (no JSON/EDL).
+- Understood: `1 موافق`, `2 خليه speaker`, `3 بدل generated اعمله motion
+  graphic`, `4 استخدم B-roll محلي`, `5 اختار الخيار B` / `5 النص: <text>`,
+  `3 ولّد`, `2 بلاش`, `اعتمد الباقي`, `وريني بس الحاجات اللي محتاجة asset`,
+  `وريني الـgenerated فقط`, `وريني الكل`.
+- Per-slot status: `pending_review`, `approved`, `changed`, `rejected`,
+  `asset_required`, `generation_approved`. Approving a treatment **never**
+  approves AI generation: that needs its own explicit answer for that slot, and
+  until then the slot's fallback is what composition uses. Missing local
+  footage never blocks (fallback). On-screen text (behind-subject/kinetic) comes
+  only from the approved transcript and is approved verbatim before the slot is.
+- `review-approve` is refused while any edit-plan slot is `pending_review`.
+  Nothing in this review generates assets, renders a cutout or sets
+  `ready_for_final_render`.
+
 ## Architecture map
 
 - `core/` — config layering, media (ffmpeg subprocess wrapper), schemas
@@ -94,6 +163,22 @@ technical question, or you're reporting the exact command you ran).
 - `brand/` — Brand Profiles (folder + `brand.yaml`) loader/validator.
 - `motion/`, `broll/`, `subject/`, `providers/`, `qa/`, `language/`,
   `localization/`, `cli/` — see their own module docstrings.
+
+## Production defaults (Phase 1.5 freeze)
+
+- **Editing profiles**: `minimal`, `balanced`, `dynamic` — `AppConfig.profile`
+  defaults to `"balanced"`. Profiles only vary event density/eligibility;
+  they never change transcript fidelity, safety/fail-closed behavior,
+  review-first gating, brand rules, or determinism.
+- **Motion Graphics is experimental and off by default.**
+  `AppConfig.motion_graphics_mode` is `"off" | "experimental"`, defaulting to
+  `"off"`. The MG code path and its tests stay in the repo either way —
+  don't delete them when MG is disabled.
+- **Deferred, not implemented as automatic default behavior**: SFX,
+  automatic B-roll generation, generated visuals, speaker replacement, and
+  advanced MG art direction. B-roll *planning* (candidate discovery) can run
+  by default; actual B-roll generation still requires explicit review
+  approval (`review_state.json`'s `broll_generation_approved`).
 
 ## Conventions to follow
 

@@ -19,6 +19,8 @@ keys. CLI command: `videoedit`.
 
 ## Start here
 
+Already installed? See the [Quick Start](docs/QUICK_START.md): `videoedit edit my_video.mp4` → review → `revise` → `approve` → MP4.
+
 **Step 1.** Open Claude Code locally.
 
 **Step 2.** Give Claude the repo and ask it to install/set it up:
@@ -354,7 +356,7 @@ and QA/B-roll/motion plan JSON files.
 | `videoedit brand init / validate` | Create or validate a Brand Profile |
 | `videoedit project inspect <dir>` | Print a project's `project.md` memory |
 
-## Capability status (as of v0.2.2)
+## Capability status (as of v0.2.3)
 
 Honest per-capability status, using six categories:
 `VERIFIED LOCALLY` (a real, non-mocked local acceptance run passed),

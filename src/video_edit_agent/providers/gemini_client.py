@@ -11,7 +11,7 @@ import base64
 from pathlib import Path
 from typing import Any
 
-from video_edit_agent.core.config import get_gemini_key
+from video_edit_agent.core.config import GeminiConfig, get_gemini_key
 
 
 class GeminiUnavailable(RuntimeError):
@@ -43,10 +43,13 @@ def _client():
     return genai.Client(api_key=get_gemini_key())
 
 
-def analyze_video_segment(video_path: Path, prompt: str, model: str = "gemini-2.5-flash") -> str:
+def analyze_video_segment(video_path: Path, prompt: str, model: str | None = None) -> str:
     """Sends a short video clip plus a text prompt to Gemini for visual
     analysis (e.g. QA visual checks, B-roll concept extraction) and returns
-    the raw text response."""
+    the raw text response. Defaults to the centralized
+    `GeminiConfig.vision_model` rather than its own hardcoded model name, so
+    there's a single place to update when Google deprecates a model."""
+    model = model or GeminiConfig().vision_model
     client = _client()
     try:
         video_bytes = video_path.read_bytes()

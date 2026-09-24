@@ -23,6 +23,7 @@ from video_edit_agent.motion.simple import engine as simple_engine
 _DIAGRAM_KINDS = {AnimationKind.DIAGRAM, AnimationKind.DATA_VIZ}
 _REMOTION_PREFERRED_KINDS = {
     AnimationKind.HOOK_TITLE,
+    AnimationKind.BEHIND_TEXT,
     AnimationKind.LOWER_THIRD,
     AnimationKind.STAT_COUNTER,
     AnimationKind.QUOTE,
@@ -83,12 +84,15 @@ def render_motion(
             if engine == MotionEngine.REMOTION:
                 out_path = output_dir / f"{slot_id}_remotion.webm"
                 result = remotion_adapter.render(
-                    spec, project_root, out_path, fps=fps, slot_id=slot_id, offline=offline
+                    spec, project_root, out_path, fps=fps, slot_id=slot_id, offline=offline, brand=brand
                 )
             elif engine == MotionEngine.MANIM:
                 result = manim_adapter.render(spec, output_dir)
             elif engine == MotionEngine.HYPERFRAMES:
-                result = hyperframes_adapter.render(spec, output_dir)
+                out_path = output_dir / f"{slot_id}_hyperframes.mov"
+                result = hyperframes_adapter.render(
+                    spec, project_root, out_path, fps=fps, slot_id=slot_id, offline=offline
+                )
             else:
                 out_path = output_dir / f"{slot_id}_simple.png"
                 result = simple_engine.render_animation(spec, out_path, brand=brand)

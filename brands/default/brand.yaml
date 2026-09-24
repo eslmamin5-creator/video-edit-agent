@@ -5,9 +5,9 @@ language:
 colors:
   primary: "#111111"
   secondary: "#FFFFFF"
-  accent: "#FFCC00"
+  accent: null
 fonts: []
-logo_rules: null
+logo_rules: "Logo stays in the top-right safe zone, never over captions."
 captions:
   preset: minimal
   rtl: true
