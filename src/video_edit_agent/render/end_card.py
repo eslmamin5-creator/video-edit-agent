@@ -10,6 +10,7 @@ from pathlib import Path
 
 from video_edit_agent.brand.logo_policy import CardSpec
 from video_edit_agent.core.media import probe_duration, run
+from video_edit_agent.render.export import audio_encode_args, video_encode_args, video_filter_tail
 
 
 class EndCardError(RuntimeError):
@@ -88,7 +89,7 @@ def _build_cmd(spec: CardSpec, workdir: Path) -> tuple[list[str], str]:
         y = round(spec.height / 2 + logo_h / 2 + spec.height * 0.03)
         graph.append(f"[c1][acc]overlay=x=(W-w)/2:y={y}[c2]")
         last = "c2"
-    graph.append(f"[{last}]format=yuv420p,setsar=1[v]")
+    graph.append(f"[{last}]{video_filter_tail()},setsar=1[v]")
     return inputs, ";".join(graph)
 
 
@@ -116,8 +117,8 @@ def render_card_clip(spec: CardSpec, out_path: Path, workdir: Path) -> Path:
         "ffmpeg", "-y", *inputs,
         "-f", "lavfi", "-t", f"{spec.duration:.3f}", "-i", "anullsrc=r=48000:cl=stereo",
         "-filter_complex", graph, "-map", "[v]", "-map", f"{len(inputs) // 8}:a",
-        "-r", f"{spec.fps:g}", "-c:v", "libx264", "-crf", "18", "-preset", "medium",
-        "-c:a", "aac", "-b:a", "160k", "-shortest", str(out_path),
+        "-r", f"{spec.fps:g}", *video_encode_args(crf=18),
+        *audio_encode_args(), "-shortest", str(out_path),
     ]
     result = run(cmd, timeout=300)
     if result.returncode != 0 or not out_path.exists():
@@ -143,8 +144,8 @@ def join_clips(first: Path, second: Path, out_path: Path, transition_s: float, f
             f"[0:a]{a_fmt}[a0];[1:a]{a_fmt}[a1];[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"
         )
     cmd = ["ffmpeg", "-y", "-i", str(first), "-i", str(second), "-filter_complex", graph,
-           "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-crf", "20", "-preset", "medium",
-           "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(out_path)]
+           "-map", "[v]", "-map", "[a]", *video_encode_args(), *audio_encode_args(),
+           "-movflags", "+faststart", str(out_path)]
     result = run(cmd, timeout=3600)
     if result.returncode != 0:
         raise EndCardError(f"clip join failed:\n{result.stderr.strip()[-1500:]}")

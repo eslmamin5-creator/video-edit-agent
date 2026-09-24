@@ -39,6 +39,7 @@ def stubbed_pipeline(monkeypatch, tmp_path: Path, sample_transcript, sample_edl:
     monkeypatch.setattr(pipeline_mod, "write_takes_packed", lambda *_a, **_k: None)
     monkeypatch.setattr(pipeline_mod, "validate_edl", lambda *_a, **_k: None)
     monkeypatch.setattr(pipeline_mod, "write_captions", lambda *_a, **_k: None)
+    monkeypatch.setattr(pipeline_mod, "assert_export_compatible", lambda *_a, **_k: None)  # renderer is stubbed
 
     resolved_item = BrollPlanItem(
         timeline_start=0.0,

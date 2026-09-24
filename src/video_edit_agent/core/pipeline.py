@@ -55,6 +55,7 @@ from video_edit_agent.qa.visual import run_visual_qa
 from video_edit_agent.render.composition import CaptionBurn, Overlay, RenderPlan
 from video_edit_agent.render.end_card import compose_with_cards, render_card_frame
 from video_edit_agent.render.export import resolve_preset
+from video_edit_agent.render.export_validation import assert_export_compatible
 from video_edit_agent.render.ffmpeg import render as render_ffmpeg
 from video_edit_agent.review import state as review_state
 from video_edit_agent.review.builder import (
@@ -584,6 +585,7 @@ def run_pipeline(
         final_output = compose_with_cards(
             content_output, paths.final_mp4, paths.cache_dir / "cards", logo_plan.intro, logo_plan.end_card
         )
+    assert_export_compatible(final_output, dataclasses.replace(preset, width=plan.edl.width, height=plan.edl.height))
     memory.render_history.append(f"Rendered {final_output} with preset '{preset_name}'")
 
     # 9. Multi-layer QA + bounded auto-repair (spec section 33)

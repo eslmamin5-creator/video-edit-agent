@@ -81,6 +81,7 @@ def pipeline_env(monkeypatch, tmp_path: Path, sample_transcript, three_clip_edl:
     monkeypatch.setattr(pipeline_mod, "write_takes_packed", lambda *_a, **_k: None)
     monkeypatch.setattr(pipeline_mod, "validate_edl", lambda *_a, **_k: None)
     monkeypatch.setattr(pipeline_mod, "write_captions", lambda *_a, **_k: None)
+    monkeypatch.setattr(pipeline_mod, "assert_export_compatible", lambda *_a, **_k: None)  # renderer is stubbed
     monkeypatch.setattr(pipeline_mod, "build_motion_plan", lambda *_a, **_k: list(planned_specs))
     monkeypatch.setattr(pipeline_mod, "resolve_brand_logo", lambda *_a, **_k: None)
 
