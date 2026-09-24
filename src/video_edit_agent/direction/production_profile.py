@@ -236,6 +236,23 @@ class VisualRhythmResult(BaseModel):
     rhythm_states: list[str] = []
 
 
+def scaled_rhythm_policy(profile: EditingProfile, zoom_scale: float = 1.0) -> RhythmPolicy:
+    """The profile's rhythm policy with the free camera moves' zoom depth scaled (the user's "less / more zoom").
+    A headline's own lower_subject move is a composition, not free variety, so it keeps its geometry."""
+    policy = RhythmPolicy(energy=camera_energy_for_profile(profile))
+    if abs(zoom_scale - 1.0) < 1e-9:
+        return policy
+
+    def level(z: float) -> float:
+        return round(1.0 + (z - 1.0) * zoom_scale, 4)
+
+    return policy.model_copy(update={
+        "punch_in_zoom": level(policy.punch_in_zoom), "slow_push_zoom": level(policy.slow_push_zoom),
+        "reframe_zoom": level(policy.reframe_zoom), "raise_zoom": level(policy.raise_zoom),
+        "reframe_shift": round(policy.reframe_shift * zoom_scale, 4),
+    })
+
+
 def plan_and_apply_visual_rhythm(
     transcript: Transcript,
     edl: EDL,
@@ -248,6 +265,7 @@ def plan_and_apply_visual_rhythm(
     pinned_headline: tuple[str, float, float] | None = None,
     allow_auto_headline_discovery: bool = True,
     locked_headline: LockedTreatment | None = None,
+    zoom_scale: float = 1.0,
 ) -> VisualRhythmResult:
     """The real production wiring (spec section 3 step 5 / section 1's Visual Rhythm):
     plans the low-semantic camera rhythm for the whole video at the profile's density,
@@ -277,7 +295,7 @@ def plan_and_apply_visual_rhythm(
         stopwords=stopwords, duration=end,
         pinned=pinned_headline, allow_auto_discovery=allow_auto_headline_discovery, locked=locked_headline,
     )
-    rhythm_policy = RhythmPolicy(energy=camera_energy_for_profile(profile))
+    rhythm_policy = scaled_rhythm_policy(profile, zoom_scale)
     compositions = [headline.composition] if headline.ok else []
     rhythm = plan_rhythm(transcript, start=0.0, end=end, policy=rhythm_policy, face_box=face_box, compositions=compositions)
     # a locked headline was proven safe against the face box measured for its approved preview: classify the move
@@ -341,5 +359,6 @@ __all__ = [
     "parse_motion_graphics_mode",
     "parse_profile",
     "plan_and_apply_visual_rhythm",
+    "scaled_rhythm_policy",
     "semantic_min_score_for_profile",
 ]

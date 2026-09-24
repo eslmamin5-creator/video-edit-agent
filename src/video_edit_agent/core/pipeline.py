@@ -20,7 +20,6 @@ from video_edit_agent.broll.planner import plan_broll
 from video_edit_agent.broll.treatment import load_decisions
 from video_edit_agent.captions.brand_style import resolve_brand_caption_style
 from video_edit_agent.captions.engine import build_ass, caption_chunks, write_captions
-from video_edit_agent.captions.modes import REDUCED, apply_behavior
 from video_edit_agent.core.config import AppConfig
 from video_edit_agent.core.media import MediaError, content_hash, extract_audio, probe
 from video_edit_agent.core.project import ProjectMemory, ProjectPaths
@@ -34,7 +33,6 @@ from video_edit_agent.core.schemas import (
 )
 from video_edit_agent.direction.production_profile import (
     burn_headline_into_captions,
-    burn_locked_headline,
     parse_profile,
     plan_and_apply_visual_rhythm,
 )
@@ -54,11 +52,13 @@ from video_edit_agent.qa.language import run_language_qa
 from video_edit_agent.qa.repair import RepairResult, run_repair_loop
 from video_edit_agent.qa.technical import run_technical_qa
 from video_edit_agent.qa.visual import run_visual_qa
+from video_edit_agent.render import treatment_preview as tpreview
 from video_edit_agent.render.composition import CaptionBurn, Overlay, RenderPlan
 from video_edit_agent.render.end_card import compose_with_cards, render_card_frame
 from video_edit_agent.render.export import resolve_preset
 from video_edit_agent.render.export_validation import assert_export_compatible
 from video_edit_agent.render.ffmpeg import render as render_ffmpeg
+from video_edit_agent.review import camera_look
 from video_edit_agent.review import locked_treatments as locks
 from video_edit_agent.review import state as review_state
 from video_edit_agent.review.builder import (
@@ -85,7 +85,11 @@ from video_edit_agent.review.schemas import (
 )
 from video_edit_agent.subject.compositor import render_subject_cutout
 from video_edit_agent.subject.framing import analyze_clip
-from video_edit_agent.transcription.router import TranscriptionRouter, save_transcript
+from video_edit_agent.transcription.router import (
+    TranscriptionRouter,
+    load_transcript,
+    save_transcript,
+)
 
 
 @dataclass
@@ -106,6 +110,95 @@ class PipelineResult:
     # False and `final_output` is None -- no expensive render has occurred.
     ready_for_final_render: bool = True
     review_dir: Path | None = None
+    pending_changes: list[str] = field(default_factory=list)  # revised treatments waiting for the user's approval
+    transcript_reused: bool = False  # the transcript came from the cache of an unchanged source
+    fidelity: dict = field(default_factory=dict)  # approved preview vs final render, per locked treatment
+
+
+def _refresh_treatment_previews(
+    *, review_dir: Path, transcript: Transcript, edl: EDL, edl_pre: EDL | None, rhythm_kwargs: dict, caption_style,
+    fonts_dir: Path | None, look: camera_look.CameraLook, lock_store: locks.LockStore, locked_headline,
+) -> None:
+    """Renders the short previews the user reviews: the camera motion (the proposal, or a revision of it) and every
+    pending headline. A preview is rendered only when its treatment has none yet, so a rerun costs nothing."""
+    previews = review_dir / "micro_previews"
+    if not camera_look.preview_current(look):
+        cur = look.current
+        if abs(cur.zoom_scale - look.render_scale()) < 1e-9 or edl_pre is None:
+            preview_edl = edl
+        else:  # a revision: plan the camera at the revised depth from the same starting point the final render uses
+            preview_edl = edl_pre.model_copy(deep=True)
+            plan_and_apply_visual_rhythm(
+                transcript, preview_edl, locked_headline=locked_headline, zoom_scale=cur.zoom_scale, **rhythm_kwargs,
+            )
+        window = tpreview.pick_motion_window(preview_edl) or tpreview.fallback_window(preview_edl)
+        out = tpreview.render_camera_preview(preview_edl, window, previews / f"camera_motion_r{cur.revision}.mp4")
+        camera_look.attach_preview(look, out, window, tpreview.planned_peak_zoom(preview_edl, window))
+    camera_look.save_look(review_dir, look)
+    for lk in lock_store.locks:
+        if lk.approval_status != locks.PENDING or lk.treatment_type != locks.TREATMENT_HEADLINE or edl_pre is None:
+            continue
+        out = tpreview.headline_preview_path(review_dir, lk)
+        if out.exists():
+            continue
+        candidate = lk.model_copy(update={"approval_status": locks.APPROVED})
+        problems = locks.validate_lock(candidate, total_duration=edl.total_duration, frame_size=(edl.width, edl.height))
+        problems = [p for p in problems if "provenance" not in p]
+        if problems:
+            raise locks.LockedTreatmentFidelityError(lk.treatment_id, problems)
+        preview_edl = edl_pre.model_copy(deep=True)
+        plan_and_apply_visual_rhythm(
+            transcript, preview_edl, locked_headline=candidate, zoom_scale=look.render_scale(), **rhythm_kwargs,
+        )
+        tpreview.render_headline_preview(candidate, transcript, preview_edl, caption_style, out, fonts_dir=fonts_dir)
+
+
+def _verify_approved_treatments(
+    *, review_dir: Path, edl: EDL, final: Path, look: camera_look.CameraLook, locked: list[locks.LockedTreatment],
+    ass_path: Path, motion_plan_path: Path, final_offset: float,
+) -> dict:
+    """approved + locked == final-render source of truth: the final render is compared with each approved preview.
+    A treatment that cannot be reproduced fails the run (LOCKED_TREATMENT_FIDELITY_ERROR)."""
+    from video_edit_agent.qa import locked_fidelity as fid
+
+    report: dict = {}
+    for lk in locked:
+        frames_ok = Path(lk.locked_preview_path).parent.name == "micro_previews" and Path(lk.locked_preview_path).name.startswith("headline_")
+        rep_ = fid.verify_locked_render(
+            lk, ass_path=ass_path if lk.headline else None, edl=edl if lk.headline else None,
+            motion_plan_path=motion_plan_path if lk.behind else None,
+            preview=Path(lk.locked_preview_path) if frames_ok else None, final=final if frames_ok else None, final_offset=final_offset,
+        )
+        report[lk.treatment_id] = {"ok": rep_.ok, "checks": rep_.checks}
+        rep_.assert_ok()
+    approved = look.approved
+    if approved is not None:
+        rep_ = fid.FidelityReport(camera_look.TREATMENT_ID)
+        peak = tpreview.planned_peak_zoom(edl, approved.window)
+        rep_.record("camera_peak_zoom", abs(peak - approved.peak_zoom) <= camera_look.ZOOM_TOL, expected=approved.peak_zoom, actual=peak)
+        probe_lock = locks.LockedTreatment(
+            treatment_id=camera_look.TREATMENT_ID, treatment_type=locks.TREATMENT_HEADLINE, text="", start=approved.window[0],
+            end=approved.window[1], preview_timeline_start=approved.window[0], locked_preview_path=approved.preview_path,
+        )
+        with_frames = Path(approved.preview_path).exists()
+        if with_frames:
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as tmp:
+                for i, frac in enumerate((0.3, 0.55, 0.8)):
+                    t = approved.window[0] + (approved.window[1] - approved.window[0]) * frac
+                    a = fid.extract_frame(Path(approved.preview_path), t - approved.window[0], Path(tmp) / f"p{i}.png")
+                    b = fid.extract_frame(final, t + final_offset, Path(tmp) / f"f{i}.png")
+                    mad = fid.region_mad(a, b, (0.0, 0.0, 1.0, 0.65))  # the caption band below is not part of the preview
+                    rep_.record(f"frame_{frac}", mad <= fid.FRAME_MAD_TOL, mad=round(mad, 2))
+        del probe_lock
+        report[camera_look.TREATMENT_ID] = {"ok": rep_.ok, "checks": rep_.checks}
+        rep_.assert_ok()
+    if report:
+        import json
+
+        (review_dir / "fidelity_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return report
 
 
 def _merged_text_treatments(approval: ReviewApprovalState, hook_review: TextTreatmentReview | None) -> list[TextTreatmentReview]:
@@ -202,6 +295,7 @@ def run_pipeline(
     review: bool | None = None,
     transcript_override: Transcript | None = None,
     logo_mode: str | None = None,
+    profile: str | None = None,
 ) -> PipelineResult:
     """Runs the editing pipeline for a single source video and writes all
     intermediate + final artifacts under `<source_video parent>/edit/`.
@@ -238,7 +332,14 @@ def run_pipeline(
     if review is False and not review_state.is_ready_for_final_render(review_dir):
         review_state.bypass(review_dir, "review bypassed explicitly (--yes / --no-review)")
     approval = review_state.load_review_state(review_dir)
-    plan_only = review is True or not approval.ready_for_final_render
+    look = camera_look.load_look(review_dir)
+    lock_store = locks.load_locks(review_dir)
+    pending_changes = (["camera_motion"] if look.pending else []) + [
+        lk.treatment_id for lk in lock_store.locks if lk.approval_status == locks.PENDING
+    ]
+    # A revised treatment waits for the user's approval: nothing is rendered until every revision is approved
+    # (or removed). An explicit `review=False` bypass renders without the pending revisions.
+    plan_only = review is True or not approval.ready_for_final_render or (bool(pending_changes) and review is not False)
 
     # 1. Media inventory
     progress("probe")
@@ -257,14 +358,21 @@ def run_pipeline(
 
     # 3. Transcription (auto no-key fallback per spec section 5/6)
     progress("transcribe")
+    transcript_reused = False
     if transcript_override is not None:
         transcript = transcript_override
         memory.log_decision("Using corrected transcript override; skipped re-transcription")
+    elif (transcript_cache := paths.cache_dir / f"{audio_path.stem}.transcript.json").exists():
+        # an unchanged source (same content hash) is never transcribed twice: an interrupted or repeated run resumes
+        transcript = load_transcript(transcript_cache)
+        transcript_reused = True
+        memory.log_decision("Reused the cached transcript of the unchanged source; skipped re-transcription")
     else:
         router = TranscriptionRouter(
             cfg.transcription, offline=offline, gemini_model=cfg.gemini.transcription_model
         )
         transcript = router.transcribe(audio_path)
+        save_transcript(transcript, transcript_cache)
     save_transcript(transcript, paths.transcript_unified)  # raw ASR; corrections stay separate
     corrections = load_corrections(review_dir)
     if corrections:
@@ -300,7 +408,7 @@ def run_pipeline(
     # section 1/3): the real camera-timeline wiring, gated only by the user's
     # editing profile. Approved behind_subject_text slots are passed through so
     # a rhythm/headline excursion never collides with them.
-    profile = parse_profile(cfg.profile)
+    profile = parse_profile(profile or cfg.profile)
     approved_slot_statuses = {"approved", "changed", "generation_approved"}
     existing_plan = load_plan(review_dir)
     existing_slots = existing_plan.slots if existing_plan else []
@@ -338,11 +446,17 @@ def run_pipeline(
         "إزاي", "ازاي", "ليه", "فين", "امتى", "إمتى", "مين", "كام", "ماذا", "كيف", "متى", "أين", "لماذا",
     })
     headline_stopwords = frozenset(ARABIC_FILLERS) | frozenset(ENGLISH_FILLERS) | _ARABIC_INTERROGATIVES
+    rhythm_kwargs = {
+        "profile": profile, "face_box": footage.face if footage else None, "headline_font_px": headline_font_px,
+        "behind_subject_windows": behind_subject_windows, "stopwords": headline_stopwords,
+        "pinned_headline": pinned_headline, "allow_auto_headline_discovery": allow_auto_headline_discovery,
+    }
+    edl_pre_rhythm = edl.model_copy(deep=True) if plan_only else None  # what a revised preview is planned from
+    camera_problems = camera_look.validate_for_render(look)
+    if camera_problems and not plan_only:
+        raise locks.LockedTreatmentFidelityError(camera_look.TREATMENT_ID, camera_problems)
     rhythm_result = plan_and_apply_visual_rhythm(
-        transcript, edl, profile=profile, face_box=footage.face if footage else None,
-        headline_font_px=headline_font_px, behind_subject_windows=behind_subject_windows,
-        stopwords=headline_stopwords, pinned_headline=pinned_headline,
-        allow_auto_headline_discovery=allow_auto_headline_discovery, locked_headline=locked_headline,
+        transcript, edl, locked_headline=locked_headline, zoom_scale=look.render_scale(), **rhythm_kwargs,
     )
 
     from video_edit_agent.editorial.edl import save as save_edl
@@ -359,14 +473,7 @@ def run_pipeline(
     caption_style = resolved_style.style
     write_captions(transcript, edl, caption_style, paths.edit_dir / "captions.ass", paths.master_srt)
     if locked_headline is not None:
-        normal_ass = build_ass(transcript, edl, caption_style, safe_zone=None)
-        recipe = locked_headline.headline
-        reduced_style = (
-            dataclasses.replace(caption_style, font_size=round(caption_style.font_size * recipe.caption_reduction_scale))
-            if recipe.caption_reduction_scale else apply_behavior(caption_style, REDUCED)
-        )
-        reduced_ass = build_ass(transcript, edl, reduced_style, safe_zone=None)
-        merged_ass = burn_locked_headline(normal_ass, reduced_ass, locked_headline, caption_style, edl.width)
+        merged_ass = tpreview.locked_headline_ass(transcript, edl, caption_style, locked_headline)
         (paths.edit_dir / "captions.ass").write_text(merged_ass, encoding="utf-8")
     elif rhythm_result.headline.ok:
         composition = rhythm_result.headline.composition
@@ -509,6 +616,14 @@ def run_pipeline(
     if plan_only:
         progress("review")
         review_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            _refresh_treatment_previews(
+                review_dir=review_dir, transcript=transcript, edl=edl, edl_pre=edl_pre_rhythm, rhythm_kwargs=rhythm_kwargs,
+                caption_style=caption_style, fonts_dir=resolve_fonts_dir(brand.name), look=look, lock_store=lock_store,
+                locked_headline=locked_headline,
+            )
+        except Exception as exc:  # noqa: BLE001 - a preview that cannot render is reported, never silently approved
+            warnings.append(f"Preview of the proposed treatments could not be rendered: {exc}")
 
         cta_text = next(
             (m.spec.text for m in motion_items if m.spec.kind.value == "cta" and m.spec.text),
@@ -601,6 +716,8 @@ def run_pipeline(
             warnings=warnings,
             ready_for_final_render=False,
             review_dir=review_dir,
+            pending_changes=pending_changes,
+            transcript_reused=transcript_reused,
         )
 
     # 8. Render (spec sections 12, 14, 47 — argument-array ffmpeg only)
@@ -615,6 +732,13 @@ def run_pipeline(
         )
     assert_export_compatible(final_output, dataclasses.replace(preset, width=plan.edl.width, height=plan.edl.height))
     memory.render_history.append(f"Rendered {final_output} with preset '{preset_name}'")
+    fidelity = _verify_approved_treatments(
+        review_dir=review_dir, edl=edl, final=final_output, look=look, locked=render_locks,
+        ass_path=paths.edit_dir / "captions.ass", motion_plan_path=paths.motion_plan,
+        final_offset=logo_plan.intro.duration if logo_plan.intro is not None else 0.0,
+    )
+    camera_look.mark_rendered(look)
+    camera_look.save_look(review_dir, look)
 
     # 9. Multi-layer QA + bounded auto-repair (spec section 33)
     progress("qa")
@@ -645,4 +769,6 @@ def run_pipeline(
         qa_report=repair_result.report,
         repairs_applied=repair_result.repairs_applied,
         warnings=warnings,
+        transcript_reused=transcript_reused,
+        fidelity=fidelity,
     )

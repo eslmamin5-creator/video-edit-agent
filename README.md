@@ -19,6 +19,8 @@ keys. CLI command: `videoedit`.
 
 ## Start here
 
+Already installed? See the [Quick Start](docs/QUICK_START.md): `videoedit edit my_video.mp4` → review → `revise` → `approve` → MP4.
+
 **Step 1.** Open Claude Code locally.
 
 **Step 2.** Give Claude the repo and ask it to install/set it up:

@@ -163,6 +163,7 @@ class LockedTreatment(BaseModel):
 class LockStore(BaseModel):
     schema_version: int = SCHEMA_VERSION
     locks: list[LockedTreatment] = Field(default_factory=list)
+    history: list[LockedTreatment] = Field(default_factory=list)  # earlier approved versions, oldest first ("undo")
 
     def get(self, treatment_id: str) -> LockedTreatment | None:
         return next((lk for lk in self.locks if lk.treatment_id == treatment_id), None)
@@ -188,8 +189,11 @@ def lock_path(review_dir: Path) -> Path:
 
 
 def serialize(store: LockStore) -> str:
-    ordered = LockStore(locks=sorted(store.locks, key=lambda lk: (lk.start, lk.treatment_id)))
-    return json.dumps(ordered.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ordered = LockStore(locks=sorted(store.locks, key=lambda lk: (lk.start, lk.treatment_id)), history=list(store.history))
+    data = ordered.model_dump(mode="json")
+    if not data.get("history"):
+        data.pop("history", None)  # a project that never revised keeps the exact bytes it always had
+    return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
 def save_locks(review_dir: Path, store: LockStore) -> Path:
@@ -241,6 +245,8 @@ def approve_from_preview(
         if previous.is_active and previous.model_dump(exclude=ignore) == stamped.model_dump(exclude=ignore):
             return previous  # re-approving an identical recipe changes nothing (idempotent)
         stamped.revision = previous.revision + 1
+        if previous.is_active:
+            store.history.append(previous)
     store.locks = [lk for lk in store.locks if lk.treatment_id != lock.treatment_id] + [stamped]
     return stamped
 
@@ -252,6 +258,8 @@ def edit_lock(store: LockStore, treatment_id: str, mutate: Callable[[LockedTreat
     if current is None:
         raise KeyError(f"no locked treatment {treatment_id!r}")
     draft = current.model_copy(deep=True)
+    if current.is_active:
+        store.history.append(current)  # the approved version stays recoverable until a new one is approved
     mutate(draft)
     draft.approval_status, draft.draft_of = PENDING, current.locked_preview_sha256 or current.locked_preview_path or "lock"
     draft.locked_at = ""
@@ -270,17 +278,34 @@ def reject(store: LockStore, treatment_id: str) -> LockedTreatment:
     return updated
 
 
+def undo(store: LockStore, treatment_id: str) -> LockedTreatment:
+    """Back to the previous approved version: any pending draft is dropped and the last approved version is restored
+    (its approved preview is still on disk, so the restored lock is exactly what the user approved earlier)."""
+    earlier = [lk for lk in store.history if lk.treatment_id == treatment_id]
+    if not earlier:
+        raise KeyError(f"no earlier version of {treatment_id!r}")
+    restored = earlier[-1]
+    store.history.remove(restored)
+    store.locks = [lk for lk in store.locks if lk.treatment_id != treatment_id] + [restored]
+    return restored
+
+
 # --------------------------------------------------------------------------
 # Revision requests ("bigger headline", "lower it", ...): a draft recipe change, never raw JSON
 # --------------------------------------------------------------------------
 
-Operation = Literal["scale_font", "shift_y", "to_behind_subject", "scale_zoom", "remove_motion", "extend_hold", "approve"]
+Operation = Literal[
+    "scale_font", "shift_y", "to_behind_subject", "scale_zoom", "remove_motion", "extend_hold", "approve", "undo", "recenter",
+]
 
 _REVISION_RULES: tuple[tuple[Operation, float, re.Pattern[str]], ...] = (
     ("approve", 0.0, re.compile(r"اعتمد|اعتمدها|approve", re.IGNORECASE)),
+    ("undo", 0.0, re.compile(r"ارجع\s*(ل)?\s*(ال)?نسخ|النسخ[ةه]\s*(اللي\s*)?قبل|undo|previous\s+version", re.IGNORECASE)),
+    ("recenter", 0.0, re.compile(r"(رجع|ارجع|خلي).*(ال)?(منتصف|نص\s*الشاشة)|re-?center|center\s+(the\s+)?speaker", re.IGNORECASE)),
     ("remove_motion", 0.0, re.compile(r"شيل\s*الحرك|remove\s+(the\s+)?(motion|move)|no\s+motion", re.IGNORECASE)),
     ("to_behind_subject", 0.0, re.compile(r"behind[\s-]*subject|ورا\s*(ال)?(شخص|متحدث)", re.IGNORECASE)),
-    ("scale_zoom", 0.5, re.compile(r"خفف\s*(ال)?\s*zoom|less\s+zoom|reduce\s+(the\s+)?zoom", re.IGNORECASE)),
+    ("scale_zoom", 0.5, re.compile(r"خفف\s*(ال)?\s*(zoom|زوم)|less\s+zoom|reduce\s+(the\s+)?zoom", re.IGNORECASE)),
+    ("scale_zoom", 1.5, re.compile(r"زود\s*(ال)?\s*(zoom|زوم)|more\s+zoom|increase\s+(the\s+)?zoom", re.IGNORECASE)),
     ("extend_hold", 1.0, re.compile(r"النص\s*أطول|خلي\s*النص\s*أطول|longer\s+(text|hold)|hold\s+longer", re.IGNORECASE)),
     ("scale_font", 1.2, re.compile(r"كبر|أكبر|bigger|larger|increase\s+(the\s+)?(size|font)", re.IGNORECASE)),
     ("scale_font", 0.85, re.compile(r"صغر|أصغر|smaller|decrease\s+(the\s+)?(size|font)", re.IGNORECASE)),
@@ -297,7 +322,7 @@ def parse_revision(request: str) -> tuple[Operation, float] | None:
     return None
 
 
-def apply_revision(store: LockStore, treatment_id: str, request: str, *, frame_height: int = 1920) -> LockedTreatment:
+def apply_revision(store: LockStore, treatment_id: str, request: str, *, frame_height: int = 1920, frame_width: int = 1080) -> LockedTreatment:
     """Applies one revision request to the treatment's draft recipe. The result is `pending_review`: render a new
     micro-preview from it, then `approve_from_preview` (or `reject`)."""
     parsed = parse_revision(request)
@@ -306,6 +331,8 @@ def apply_revision(store: LockStore, treatment_id: str, request: str, *, frame_h
     op, amount = parsed
     if op == "approve":
         raise ValueError("approval needs the rendered preview: use approve_from_preview")
+    if op == "undo":
+        return undo(store, treatment_id)
 
     def mutate(lk: LockedTreatment) -> None:
         h, b = lk.headline, lk.behind
@@ -324,6 +351,15 @@ def apply_revision(store: LockStore, treatment_id: str, request: str, *, frame_h
         elif op == "scale_zoom" and h is not None:
             h.zoom = round(1.0 + (h.zoom - 1.0) * amount, 4)
             h.geometry = {**h.geometry, "zoom": h.zoom}
+        elif op == "recenter":
+            if h is not None:
+                h.anchor_x = 0.5
+                h.geometry = {**h.geometry, "anchor_x": 0.5}
+            if b is not None:
+                half = (b.bounds[2] - b.bounds[0]) / 2
+                cx = frame_width / 2
+                b.center_x = cx
+                b.bounds = (cx - half, b.bounds[1], cx + half, b.bounds[3])
         elif op == "remove_motion" and h is not None:
             h.zoom, h.anchor_x = 1.0, 0.5
             h.geometry = {**h.geometry, "zoom": 1.0, "anchor_x": 0.5}
@@ -423,6 +459,21 @@ def headline_composition(lock: LockedTreatment):
     )
 
 
+def shift_lock(lock: LockedTreatment, offset: float) -> LockedTreatment:
+    """The same recipe with every timeline second moved by -`offset` (a preview clip that starts at `offset`)."""
+    def sh(v: float) -> float:
+        return round(v - offset, 3)
+
+    out = lock.model_copy(deep=True)
+    out.start, out.end = sh(lock.start), sh(lock.end)
+    h = out.headline
+    if h is not None:
+        h.fade_in, h.fade_out = (sh(h.fade_in[0]), sh(h.fade_in[1])), (sh(h.fade_out[0]), sh(h.fade_out[1]))
+        h.caption_reduction_window = (sh(h.caption_reduction_window[0]), sh(h.caption_reduction_window[1]))
+        h.changes = tuple(sh(v) for v in h.changes)  # type: ignore[assignment]
+    return out
+
+
 def headline_spec(lock: LockedTreatment):
     from video_edit_agent.captions.headline import HeadlineSpec
 
@@ -486,5 +537,7 @@ __all__ = [
     "require_renderable",
     "save_locks",
     "serialize",
+    "shift_lock",
+    "undo",
     "validate_lock",
 ]

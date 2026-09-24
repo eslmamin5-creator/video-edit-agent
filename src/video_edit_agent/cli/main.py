@@ -26,7 +26,6 @@ from video_edit_agent.brand.validator import validate_brand
 from video_edit_agent.cli import config as config_cli
 from video_edit_agent.cli import setup as setup_cli
 from video_edit_agent.cli.doctor import print_doctor_report
-from video_edit_agent.core.capability_router import full_capability_matrix
 from video_edit_agent.core.config import AppConfig
 from video_edit_agent.core.pipeline import run_pipeline
 from video_edit_agent.core.project import ProjectPaths
@@ -70,84 +69,103 @@ def _root(
         raise typer.Exit()
 
 
+def _project_of(video_or_dir: Path) -> Path:
+    """`videoedit approve talk.mp4` and `videoedit approve edit/` both work."""
+    p = Path(video_or_dir)
+    return p if p.is_dir() else ProjectPaths.for_source(p).edit_dir
+
+
+def _show_board(edit_dir: Path) -> None:
+    from video_edit_agent.review import treatment_board as board
+
+    cards = board.items(edit_dir)
+    if not cards:
+        console.print("No major treatments to review in this video.")
+        return
+    for c in cards:
+        console.print(f"[bold]{c.name}[/bold]  -  {c.status}")
+        console.print(f"  {c.reason}")
+        if c.preview is not None:
+            console.print(f"  Preview: {c.preview}")
+        console.print(f"  Choices: {' / '.join(c.actions)}   (name: {c.treatment_id})")
+
+
+def _plan_again(video: Path, edit_dir: Path) -> None:
+    """Renders the previews of anything that changed, reusing the saved setup answers and the cached transcript."""
+    from video_edit_agent.review import setup_choices
+
+    choices = setup_choices.resolve_choices(edit_dir / "review")
+    run_pipeline(
+        video, brand_name=choices.brand, offline=choices.offline, preset_name=choices.preset,
+        caption_style_name=choices.caption_style, enable_broll=False, enable_motion=False, review=True,
+        profile=choices.profile,
+    )
+
+
 @app.command()
 def edit(
-    video: Path = typer.Argument(..., exists=True, help="Path to the source video file."),
-    brand: str | None = typer.Option(None, "--brand", help="Brand profile name under brands/."),
-    preset: str = typer.Option("reel", "--preset", help="Export preset: reel|tiktok|shorts|square|landscape."),
-    caption_style: str = typer.Option("word-highlight", "--caption-style"),
-    offline: bool = typer.Option(False, "--offline", help="Block all cloud calls; local-only pipeline."),
-    no_broll: bool = typer.Option(False, "--no-broll"),
-    no_motion: bool = typer.Option(False, "--no-motion"),
-    yes: bool = typer.Option(
-        False, "--yes", "--no-review",
-        help="Skip the review gate and render immediately (explicit, recorded bypass of the review-first default).",
-    ),
-    logo_mode: str | None = typer.Option(
-        None, "--logo-mode",
-        help="Override the Brand Profile logo mode: none|intro|end_card|intro_and_end|persistent_bug.",
-    ),
+    video: Path = typer.Argument(..., exists=True, help="Path to the video."),
+    profile: str | None = typer.Option(None, "--profile", help="How much editing: minimal | balanced | dynamic (default balanced)."),
+    brand: str | None = typer.Option(None, "--brand", help="Your brand name. Without it a clean neutral look is used."),
+    preset: str | None = typer.Option(None, "--preset", help="Format: reel | tiktok | shorts | square | landscape."),
+    caption_style: str | None = typer.Option(None, "--caption-style", help="Caption look."),
+    offline: bool = typer.Option(False, "--offline", help="Work fully on this computer; no cloud."),
+    no_broll: bool = typer.Option(False, "--no-broll", hidden=True),
+    no_motion: bool = typer.Option(False, "--no-motion", hidden=True),
+    yes: bool = typer.Option(False, "--yes", "--no-review", help="Skip the review step and render straight away."),
+    logo_mode: str | None = typer.Option(None, "--logo-mode", hidden=True),
 ):
-    """Run the full editing pipeline on a single source video.
+    """Edit a video: analysis, a proposed edit, a short review, then the final MP4.
 
-    Review-first is the default: until the project's review is approved
-    (`videoedit review-approve`), this stops before any expensive work and
-    writes review artifacts (transcript, caption preview, brand summary,
-    timeline, B-roll plan, preview frames) under `edit/review/`. Pass `--yes`
-    (or `--no-review`) to deliberately bypass the gate and render."""
+    The first run analyses the video and shows you the main treatments with short previews (nothing is rendered
+    yet). Ask for changes with `videoedit revise`, approve with `videoedit approve`, then run this command again
+    to get the final MP4."""
+    from video_edit_agent.review import setup_choices
+
     lang = _lang()
+    paths = ProjectPaths.for_source(video)
+    try:
+        choices = setup_choices.resolve_choices(
+            paths.edit_dir / "review", profile=profile, brand=brand, preset=preset, caption_style=caption_style,
+            offline=True if offline else None,
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=2) from exc
+    setup_choices.save_choices(paths.edit_dir / "review", choices)
     console.print(t("analyzing_video", lang))
-
-    matrix = full_capability_matrix()
-    if not matrix["gemini_key"].available and not matrix["elevenlabs_key"].available:
-        console.print(t("no_api_keys", lang))
-    if offline:
+    if choices.offline:
         console.print(t("offline_mode", lang))
 
     def on_progress(stage: str) -> None:
-        stage_messages = {
-            "transcribe": "analyzing_video",
-            "edl": "preparing_edl",
-            "captions": "generating_captions",
-            "motion": "generating_motion",
-            "qa": "running_qa",
-        }
-        key = stage_messages.get(stage)
+        key = {"transcribe": "analyzing_video", "edl": "preparing_edl", "captions": "generating_captions",
+               "motion": "generating_motion", "qa": "running_qa"}.get(stage)
         if key:
             console.print(t(key, lang))
 
     result = run_pipeline(
         video,
-        brand_name=brand,
-        offline=offline,
-        preset_name=preset,
-        caption_style_name=caption_style,
+        brand_name=choices.brand,
+        offline=choices.offline,
+        preset_name=choices.preset,
+        caption_style_name=choices.caption_style,
         enable_broll=not no_broll,
         enable_motion=not no_motion,
         on_progress=on_progress,
         review=False if yes else None,
         logo_mode=logo_mode,
+        profile=choices.profile,
     )
 
     if not result.ready_for_final_render and result.review_dir is not None:
-        console.print("[bold]Review before render:[/bold] the pipeline stopped before the final render.")
-        console.print(f"Review artifacts: {result.review_dir}")
-        console.print(" - transcript_review.json  (caption/transcript text)")
-        console.print(" - caption_preview.json    (caption style)")
-        console.print(" - brand_summary.json      (brand colors/logo/CTA)")
-        console.print(" - timeline_review.json    (edit/cut/B-roll/motion plan)")
-        console.print(" - broll_review.json       (per-slot B-roll treatment; nothing generated yet)")
-        console.print(" - transcript_corrections.json (created when you correct the transcript)")
-        console.print(" - contact_sheet.jpg / frames/  (representative preview frames)")
+        console.print(f"[bold]Ready for your review[/bold] ({choices.profile} style). Nothing has been rendered yet.")
+        _show_board(paths.edit_dir)
         console.print(
-            f"Review the transcript in chat with [bold]videoedit review-chat {result.project_dir} --open[/bold] "
-            f"(then answer naturally, e.g. `9: <sentence>`); "
-            f"once satisfied run [bold]videoedit review-approve {result.project_dir}[/bold] "
-            f"then re-run [bold]videoedit edit {video}[/bold] to render, "
-            "or re-run this command with --yes to skip review entirely."
+            "Ask for a change:  [bold]videoedit revise <video> \"<what you want>\"[/bold]   "
+            "Happy with it:  [bold]videoedit approve <video>[/bold]   then run [bold]videoedit edit <video>[/bold] again for the MP4."
         )
         if result.warnings:
-            console.print(f"Warnings: {'; '.join(result.warnings)}")
+            console.print(f"Notes: {'; '.join(result.warnings)}")
         return
 
     if result.final_output is None:
@@ -155,10 +173,79 @@ def edit(
         raise typer.Exit(code=1)
 
     console.print(t("render_success", lang))
-    console.print(f"Output: {result.final_output}")
-    console.print(f"Project files: {result.project_dir}")
+    console.print(f"Your video: {result.final_output}")
     if result.qa_report and result.qa_report.issues:
-        console.print(f"QA issues: {len(result.qa_report.issues)} (see project.md for detail)")
+        console.print(f"QA notes: {len(result.qa_report.issues)} (see project.md for detail)")
+
+
+@app.command()
+def review(video: Path = typer.Argument(..., exists=True, help="The video (or its edit folder).")):
+    """Show the main treatments, each with its preview and what you can do with it."""
+    _show_board(_project_of(video))
+
+
+@app.command()
+def revise(
+    video: Path = typer.Argument(..., exists=True, help="The video (or its edit folder)."),
+    request: str = typer.Argument(..., help="What to change, in your own words, e.g. خفف الزوم or كبر الهيدر."),
+):
+    """Ask for a change. The old approval no longer counts; a new preview is rendered for you to approve."""
+    from video_edit_agent.review import treatment_board as board
+
+    edit_dir = _project_of(video)
+    try:
+        board.revise(edit_dir, request)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    if video.is_file():
+        console.print("Updating the preview...")
+        _plan_again(video, edit_dir)
+    console.print("Changed. Please look at the new preview and approve it when you are happy.")
+    _show_board(edit_dir)
+
+
+@app.command()
+def approve(video: Path = typer.Argument(..., exists=True, help="The video (or its edit folder).")):
+    """Approve what the previews show. It is then locked: the final video uses exactly this."""
+    from video_edit_agent.review import treatment_board as board
+
+    edit_dir = _project_of(video)
+    if video.is_file() and board.waiting_for_preview(edit_dir):
+        console.print("Updating the preview first...")
+        _plan_again(video, edit_dir)
+    done = board.approve(edit_dir)
+    try:
+        review_state.approve(edit_dir / "review", note="approved via `videoedit approve`")
+    except review_state.UnresolvedReviewItems as exc:
+        console.print(f"[red]Not approved yet: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"Approved and locked: {len(done)} change(s). Run [bold]videoedit edit {video}[/bold] to make the final MP4.")
+
+
+@app.command()
+def undo(video: Path = typer.Argument(..., exists=True, help="The video (or its edit folder).")):
+    """Go back to the version before your last change."""
+    from video_edit_agent.review import treatment_board as board
+
+    try:
+        board.undo(_project_of(video))
+    except KeyError as exc:
+        console.print(f"[red]{exc.args[0]}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print("Went back to the earlier version. Approve it again to lock it.")
+
+
+@app.command()
+def remove(
+    video: Path = typer.Argument(..., exists=True, help="The video (or its edit folder)."),
+    treatment: str = typer.Argument(..., help="Which treatment to remove (see `videoedit review`)."),
+):
+    """Remove a treatment from the edit."""
+    from video_edit_agent.review import treatment_board as board
+
+    board.remove(_project_of(video), treatment)
+    console.print("Removed.")
 
 
 @app.command(name="review-approve")
