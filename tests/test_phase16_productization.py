@@ -303,3 +303,22 @@ def test_20_client_regression_lock_bytes_unchanged_without_history(tmp_path):
     data = json.loads(lt.serialize(store))
     assert "history" not in data  # a project that never revised serializes exactly as it did in v0.2.3-RC
     assert (Path(__file__).parent / "test_phase153_locked_treatments.py").exists()
+
+
+# Phase 1.6.1: interruption / resume
+def test_161_resume_keeps_locks_settings_and_is_idempotent(project):
+    rd = project / "review"
+    _approved_camera(project, "خفف الزوم")
+    sc.save_choices(rd, sc.resolve_choices(rd, profile="dynamic", brand=None))
+    _pending_headline(project)
+    before = {p.name: p.read_bytes() for p in rd.glob("*.json")}
+    for _ in range(2):  # an interrupted render leaves review state untouched; each resume loads and re-saves it
+        lt.save_locks(rd, lt.load_locks(rd))
+        cam.save_look(rd, cam.load_look(rd))
+        sc.save_choices(rd, sc.resolve_choices(rd))
+        assert board.approve(project) == []  # nothing pending with a preview is silently approved
+    assert {p.name: p.read_bytes() for p in rd.glob("*.json")} == before
+    assert sc.resolve_choices(rd).profile == "dynamic"
+    assert cam.load_look(rd).render_scale() == pytest.approx(0.5)
+    assert lt.load_locks(rd).get(HID).approval_status == lt.PENDING  # a pending revision is not revived as approved
+    assert "Existing project found" in inspect.getsource(cli.edit)

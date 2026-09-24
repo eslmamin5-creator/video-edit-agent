@@ -132,6 +132,8 @@ def edit(
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=2) from exc
+    if setup_choices.load_choices(paths.edit_dir / "review") is not None:
+        console.print("Existing project found. Your earlier progress and approved edits are kept; continuing from where it stopped.")
     setup_choices.save_choices(paths.edit_dir / "review", choices)
     console.print(t("analyzing_video", lang))
     if choices.offline:
