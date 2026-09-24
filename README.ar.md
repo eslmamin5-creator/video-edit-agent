@@ -332,7 +332,7 @@ videoedit edit my_take.mp4
 | `videoedit brand init / validate` | إنشاء أو فحص Brand Profile |
 | `videoedit project inspect <dir>` | طباعة ذاكرة `project.md` بتاعة المشروع |
 
-## حالة القدرات (اعتبارًا من v0.2.2)
+## حالة القدرات (اعتبارًا من v0.2.3)
 
 حالة صادقة لكل قدرة، بستة فئات: `VERIFIED LOCALLY` (تشغيل قبول حقيقي غير
 وهمي نجح محليًا)، `VERIFIED WITH CLOUD` (نداء API حي حقيقي نجح)، `OPTIONAL`

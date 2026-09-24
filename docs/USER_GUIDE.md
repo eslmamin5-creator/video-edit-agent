@@ -1,6 +1,6 @@
 # video-edit-agent — User Guide
 
-*Version 0.2.2. This is a user-facing guide — for architecture and internals
+*Version 0.2.3. This is a user-facing guide — for architecture and internals
 see `agent/core_instructions.md` and the module docstrings under `src/`.*
 
 This is the editable Markdown source for the PDF guide
