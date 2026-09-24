@@ -45,6 +45,12 @@ from video_edit_agent.direction.composition import (
 )
 from video_edit_agent.direction.rhythm import RhythmPolicy, plan_rhythm
 from video_edit_agent.motion.legibility import estimate_title_box
+from video_edit_agent.review.locked_treatments import (
+    LockedTreatment,
+    LockedTreatmentFidelityError,
+    headline_composition,
+    headline_spec,
+)
 
 
 class EditingProfile(str, Enum):
@@ -160,6 +166,7 @@ def discover_and_verify_headline(
     duration: float | None = None,
     pinned: tuple[str, float, float] | None = None,
     allow_auto_discovery: bool = True,
+    locked: LockedTreatment | None = None,
 ) -> HeadlineWiring:
     """Reuses the real, generic, already-tested Phase 1.3.4/1.3.5 pipeline -- global
     candidate discovery, then targeted geometry verification, then the final
@@ -177,6 +184,10 @@ def discover_and_verify_headline(
     previously-reviewed project with no approved headline for this run: fresh
     auto-discovery must not silently burn an unreviewed candidate into the render
     (a `pending_review` candidate stays a reviewable candidate only)."""
+    if locked is not None:
+        # Phase 1.5.3: an approved, locked headline is replayed exactly -- no discovery, no re-verification
+        # against a different face/window, no fallback to a different treatment.
+        return HeadlineWiring(candidate=None, composition=headline_composition(locked))
     if not words or face_box is None:
         return HeadlineWiring()
     comp_policy = CompositionPolicy()
@@ -236,6 +247,7 @@ def plan_and_apply_visual_rhythm(
     stopwords: frozenset[str] = frozenset(),
     pinned_headline: tuple[str, float, float] | None = None,
     allow_auto_headline_discovery: bool = True,
+    locked_headline: LockedTreatment | None = None,
 ) -> VisualRhythmResult:
     """The real production wiring (spec section 3 step 5 / section 1's Visual Rhythm):
     plans the low-semantic camera rhythm for the whole video at the profile's density,
@@ -263,15 +275,24 @@ def plan_and_apply_visual_rhythm(
         headline_font_px=headline_font_px,
         existing_treatments=[(s, e, "behind_subject_text") for s, e in behind_subject_windows],
         stopwords=stopwords, duration=end,
-        pinned=pinned_headline, allow_auto_discovery=allow_auto_headline_discovery,
+        pinned=pinned_headline, allow_auto_discovery=allow_auto_headline_discovery, locked=locked_headline,
     )
     rhythm_policy = RhythmPolicy(energy=camera_energy_for_profile(profile))
     compositions = [headline.composition] if headline.ok else []
     rhythm = plan_rhythm(transcript, start=0.0, end=end, policy=rhythm_policy, face_box=face_box, compositions=compositions)
+    # a locked headline was proven safe against the face box measured for its approved preview: classify the move
+    # against that same box, so a different re-measurement can never silently drop the approved camera move
+    camera_face = (locked_headline.headline.face_box if locked_headline is not None and locked_headline.headline.face_box else face_box)
     timeline = build_camera_timeline(
-        rhythm, face_box=face_box, legacy=legacy_events(edl), behind_subject=list(behind_subject_windows), scope=(0.0, end),
+        rhythm, face_box=camera_face, legacy=legacy_events(edl), behind_subject=list(behind_subject_windows), scope=(0.0, end),
     )
-    apply_timeline(edl, timeline, face_box=face_box)
+    if locked_headline is not None:
+        s0, s1 = locked_headline.headline.changes[0], locked_headline.headline.changes[3]
+        if not any(e.move.value == "lower_subject" and abs(e.start - s0) < 0.05 for e in timeline.executable if s0 <= e.start <= s1):
+            raise LockedTreatmentFidelityError(
+                locked_headline.treatment_id, ["the locked lower_subject camera move is not executable in the camera timeline"],
+            )
+    apply_timeline(edl, timeline, face_box=camera_face)
     return VisualRhythmResult(headline=headline, rhythm_states=[r.state for r in rhythm.rows])
 
 
@@ -293,6 +314,18 @@ def burn_headline_into_captions(
     return add_headline(merged, hstyle, spec, width)
 
 
+def burn_locked_headline(
+    normal_ass: str, reduced_ass: str, lock: LockedTreatment, caption_style: CaptionStyle, width: int,
+) -> str:
+    """The approved headline recipe replayed verbatim: the locked font size, y, fade, slide/settle and the locked
+    caption-reduction window (not the composition span), on the same caption ASS the approved preview used."""
+    recipe = lock.headline
+    if recipe is None:
+        raise LockedTreatmentFidelityError(lock.treatment_id, ["not a headline lock"])
+    merged = reduce_captions(normal_ass, reduced_ass, recipe.caption_reduction_window)
+    return add_headline(merged, headline_style(caption_style, recipe.font_px), headline_spec(lock), width)
+
+
 __all__ = [
     "DEFAULT_MOTION_GRAPHICS_MODE",
     "DEFAULT_PROFILE",
@@ -301,6 +334,7 @@ __all__ = [
     "MotionGraphicsMode",
     "VisualRhythmResult",
     "burn_headline_into_captions",
+    "burn_locked_headline",
     "camera_energy_for_profile",
     "discover_and_verify_headline",
     "motion_graphics_enabled",

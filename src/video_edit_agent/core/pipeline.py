@@ -20,6 +20,7 @@ from video_edit_agent.broll.planner import plan_broll
 from video_edit_agent.broll.treatment import load_decisions
 from video_edit_agent.captions.brand_style import resolve_brand_caption_style
 from video_edit_agent.captions.engine import build_ass, caption_chunks, write_captions
+from video_edit_agent.captions.modes import REDUCED, apply_behavior
 from video_edit_agent.core.config import AppConfig
 from video_edit_agent.core.media import MediaError, content_hash, extract_audio, probe
 from video_edit_agent.core.project import ProjectMemory, ProjectPaths
@@ -33,6 +34,7 @@ from video_edit_agent.core.schemas import (
 )
 from video_edit_agent.direction.production_profile import (
     burn_headline_into_captions,
+    burn_locked_headline,
     parse_profile,
     plan_and_apply_visual_rhythm,
 )
@@ -57,6 +59,7 @@ from video_edit_agent.render.end_card import compose_with_cards, render_card_fra
 from video_edit_agent.render.export import resolve_preset
 from video_edit_agent.render.export_validation import assert_export_compatible
 from video_edit_agent.render.ffmpeg import render as render_ffmpeg
+from video_edit_agent.review import locked_treatments as locks
 from video_edit_agent.review import state as review_state
 from video_edit_agent.review.builder import (
     build_brand_summary,
@@ -301,11 +304,16 @@ def run_pipeline(
     approved_slot_statuses = {"approved", "changed", "generation_approved"}
     existing_plan = load_plan(review_dir)
     existing_slots = existing_plan.slots if existing_plan else []
+    # Phase 1.5.3: approved Locked Treatment Specs are replayed as approved; every lock must be renderable
+    # (LOCKED_TREATMENT_FIDELITY_ERROR otherwise -- never a silent fallback to a different look).
+    render_locks = locks.locks_for_render(review_dir, total_duration=edl.total_duration, frame_size=(edl.width, edl.height))
+    locked_headline = next((lk for lk in render_locks if lk.treatment_type == locks.TREATMENT_HEADLINE), None)
+    locked_behind = [lk for lk in render_locks if lk.treatment_type == locks.TREATMENT_BEHIND]
     behind_subject_windows = [
         (s.timeline_start, s.timeline_end)
         for s in existing_slots
         if s.treatment == "behind_subject_text" and s.status.value in approved_slot_statuses
-    ]
+    ] + [lk.window() for lk in locked_behind]
     # Approved-state integrity (Phase 1.5.1): an explicitly approved lower_subject_semantic
     # headline in the project's own persisted review state is pinned and re-verified, never
     # displaced by a freshly auto-discovered candidate. For an existing, previously-reviewed
@@ -334,7 +342,7 @@ def run_pipeline(
         transcript, edl, profile=profile, face_box=footage.face if footage else None,
         headline_font_px=headline_font_px, behind_subject_windows=behind_subject_windows,
         stopwords=headline_stopwords, pinned_headline=pinned_headline,
-        allow_auto_headline_discovery=allow_auto_headline_discovery,
+        allow_auto_headline_discovery=allow_auto_headline_discovery, locked_headline=locked_headline,
     )
 
     from video_edit_agent.editorial.edl import save as save_edl
@@ -350,7 +358,17 @@ def run_pipeline(
     resolved_style = resolve_brand_caption_style(caption_style_name, brand)
     caption_style = resolved_style.style
     write_captions(transcript, edl, caption_style, paths.edit_dir / "captions.ass", paths.master_srt)
-    if rhythm_result.headline.ok:
+    if locked_headline is not None:
+        normal_ass = build_ass(transcript, edl, caption_style, safe_zone=None)
+        recipe = locked_headline.headline
+        reduced_style = (
+            dataclasses.replace(caption_style, font_size=round(caption_style.font_size * recipe.caption_reduction_scale))
+            if recipe.caption_reduction_scale else apply_behavior(caption_style, REDUCED)
+        )
+        reduced_ass = build_ass(transcript, edl, reduced_style, safe_zone=None)
+        merged_ass = burn_locked_headline(normal_ass, reduced_ass, locked_headline, caption_style, edl.width)
+        (paths.edit_dir / "captions.ass").write_text(merged_ass, encoding="utf-8")
+    elif rhythm_result.headline.ok:
         composition = rhythm_result.headline.composition
         normal_ass = build_ass(transcript, edl, caption_style, safe_zone=None)
         reduced_style = dataclasses.replace(caption_style, font_size=round(caption_style.font_size * 0.72))
@@ -397,8 +415,18 @@ def run_pipeline(
             hook_plan = plan_hook(edl, transcript, brand, footage, approval, for_final_render=not plan_only)
             specs = build_motion_plan(edl, transcript, brand=brand, analysis=footage, hook=hook_plan)
             # Behind-subject text the user approved in the edit plan (nothing while pending).
+            # Locked behind-subject treatments replay their approved recipe; the generic planner only sees the
+            # slots no lock owns, so it can never re-interpret (or displace) an approved treatment.
+            plan_now = load_plan(review_dir)
+            if plan_now is not None and locked_behind:
+                owned = locks.LockStore(locks=locked_behind)
+                plan_now = plan_now.model_copy(update={"slots": [
+                    sl for sl in plan_now.slots
+                    if not (sl.treatment == "behind_subject_text" and owned.owns(sl.timeline_start, sl.timeline_end))
+                ]})
+            specs.extend(locks.behind_subject_spec(lk) for lk in locked_behind)
             for bs_plan in plan_behind_subject_for_project(
-                load_plan(review_dir), edl, brand, transcript=transcript, caption_style=caption_style,
+                plan_now, edl, brand, transcript=transcript, caption_style=caption_style,
                 project_root=paths.root, cache_dir=paths.cache_dir, offline=offline,
             ):
                 if bs_plan.spec is not None:
