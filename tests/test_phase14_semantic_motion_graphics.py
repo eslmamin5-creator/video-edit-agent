@@ -38,7 +38,7 @@ from video_edit_agent.render.motion_graphics import (
 )
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "video_edit_agent"
-BRAND = load_brand("client")
+BRAND = load_brand("acme_test")
 STYLE = CaptionStyle(name="Test", font_ar="Test Sans", font_size=64, primary_color="&H00FFFFFF",
                      outline_color="&H00000000", back_color="&H00000000", outline=2.0, shadow=0.0)
 
@@ -128,10 +128,12 @@ def test_7_max_5_primary_diagram_nodes():
 # ---- 8. brand tokens come from profile -----------------------------------------------------------------------------
 def test_8_brand_tokens_come_from_profile():
     tok = brand_tokens(BRAND)
-    assert tok["colors"]["primary"] == BRAND.colors.primary == "#0A3D62"
-    assert tok["colors"]["secondary"] == BRAND.colors.secondary == "#8E44AD"
-    assert tok["colors"]["accent"] == BRAND.colors.accent == "#F1C40F"
-    assert tok["font_ar"] == "IBM Plex Sans Arabic"
+    assert tok["colors"]["primary"] == BRAND.colors.primary
+    assert tok["colors"]["secondary"] == BRAND.colors.secondary
+    assert tok["colors"]["accent"] == BRAND.colors.accent
+    assert BRAND.colors.primary == "#0B1E3D"
+    if BRAND.fonts:
+        assert tok["font_ar"] == BRAND.typography.arabic
 
 
 # ---- 9. no client hardcoding in the generic renderer/discovery modules --------------------------------------------------

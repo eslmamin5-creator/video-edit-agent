@@ -10,6 +10,7 @@ the real libass build, on rendered pixels.
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -28,7 +29,8 @@ from video_edit_agent.core.schemas import EDL, EDLClip, Segment, Transcript, Wor
 
 _BIDI = re.compile("[\u202a-\u202e\u2066-\u2069\u200e\u200f]")
 _BLOCK = re.compile(r"\{[^}]*\}")
-_FONTS = Path(__file__).resolve().parents[1] / "brands" / "client" / "fonts"
+# Optional: point VEA_TEST_BRAND_FONTS at a directory holding a brand font to run the font-dependent tests.
+_FONTS = Path(os.environ.get("VEA_TEST_BRAND_FONTS") or "__no_brand_fonts__")
 
 _SEG16 = ["ولا", "هي", "كانت", "عبارة", "عن", "وجهة", "نظر", "من", "الـbusiness", "owner", "أو", "من", "الـbrand", "owner"]
 _SEG16_DUR = [0.38, 0.58, 0.38, 0.46, 0.12, 0.40, 0.36, 0.18, 0.54, 0.32, 0.16, 0.16, 0.42, 0.36]

@@ -209,10 +209,10 @@ def test_explicit_motif_is_drawn_and_unknown_or_accentless_ones_are_ignored(tmp_
     assert no_accent.accent_style == "none"
 
 
-def test_shipped_client_profile_defines_no_end_card_motif():
-    root = Path(__file__).resolve().parent.parent / "brands" / "client" / "brand.yaml"
+def test_shipped_default_profile_defines_no_end_card_motif():
+    root = Path(__file__).resolve().parent.parent / "brands" / "default" / "brand.yaml"
     if not root.exists():
-        pytest.skip("client brand not present")
+        pytest.skip("default brand not present")
     import yaml
 
     behavior = (yaml.safe_load(root.read_text(encoding="utf-8")).get("logo") or {}).get("behavior") or {}
