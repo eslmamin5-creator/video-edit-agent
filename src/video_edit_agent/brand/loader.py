@@ -30,6 +30,8 @@ def load_brand(name: str | None, root: Path | None = None) -> Brand:
     d = brand_dir(name, root)
     yaml_path = d / "brand.yaml"
     if not yaml_path.exists():
+        if name == DEFAULT_BRAND.name:  # the built-in neutral profile works without any brands folder
+            return DEFAULT_BRAND
         raise BrandNotFoundError(f"Brand '{name}' not found at {yaml_path}")
     data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
     data.setdefault("name", name)
